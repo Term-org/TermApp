@@ -1,0 +1,18 @@
+# ~/.bashrc - default interactive shell configuration
+
+case $- in
+    *i*) ;;
+    *) return ;;
+esac
+
+shopt -s checkwinsize histappend
+HISTSIZE=5000
+HISTFILESIZE=10000
+HISTCONTROL=ignoredups:erasedups
+
+PS1='\[\e[1;32m\]\u\[\e[0m\]@\[\e[1;36m\]term${TERM_APP_ID##*.}\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
+
+alias ls='ls --color=auto'
+alias ll='ls -lAh'
+alias grep='grep --color=auto'
+alias ..='cd ..'

@@ -1,0 +1,366 @@
+# tn - Term package manager (frontend for apt and dpkg)
+#
+# Usage: tn <command> [arguments]
+# Run "tn help" for the full list.
+
+set -u
+
+: "${PREFIX:?tn: PREFIX is not set}"
+
+TN_VERSION="1.1.0"
+APT_DIR="$PREFIX/etc/apt"
+LIST_DIR="$APT_DIR/sources.list.d"
+COMMUNITY_BASE="${TN_COMMUNITY_URL:-https://term-org.github.io/TCP}"
+
+die() {
+    echo "tn: $*" >&2
+    exit 1
+}
+
+need() {
+    command -v "$1" >/dev/null 2>&1 || die "$1 was not found. Run: tn doctor"
+}
+
+usage() {
+    cat <<'EOF'
+tn - Term package manager
+
+Packages:
+  tn update                    Refresh the package lists
+  tn upgrade                   Update the lists, then upgrade installed packages
+  tn install PKG...            Install packages
+  tn remove PKG...             Remove packages
+  tn purge PKG...              Remove packages together with their configuration
+  tn autoremove                Remove packages that are no longer needed
+  tn search TERM               Search for packages
+  tn show PKG                  Show package details
+  tn list [apt list options]   List packages
+  tn files PKG                 List the files installed by a package
+  tn owns FILE                 Find the package that owns a file
+  tn clean                     Delete downloaded package files
+
+Repositories:
+  tn repo list
+  tn repo add NAME URL [SUITE [COMPONENT]] [--keyring FILE]
+  tn repo remove NAME
+  tn repo enable NAME
+  tn repo disable NAME
+
+Community packages (Term Community Packages):
+  tn community enable [-y]     Enable the community repository
+  tn community disable         Disable it again
+  tn community status          Show whether it is enabled
+
+Other:
+  tn doctor                    Check the environment
+  tn version                   Show the version
+  tn help                      Show this help
+EOF
+}
+
+repo_cmd() {
+    local action="${1:-list}"
+    if [ $# -gt 0 ]; then
+        shift
+    fi
+
+    case "$action" in
+        list)
+            if [ -f "$APT_DIR/sources.list" ]; then
+                echo "[main] sources.list"
+                grep -v '^[[:space:]]*#' "$APT_DIR/sources.list" | grep -v '^[[:space:]]*$' | sed 's/^/    /'
+            fi
+            local file name state
+            for file in "$LIST_DIR"/*.list "$LIST_DIR"/*.list.disabled; do
+                [ -f "$file" ] || continue
+                name="$(basename "$file")"
+                state="enabled"
+                case "$name" in
+                    *.list.disabled)
+                        state="disabled"
+                        name="${name%.list.disabled}"
+                        ;;
+                    *)
+                        name="${name%.list}"
+                        ;;
+                esac
+                echo "[$name] ($state)"
+                grep -v '^[[:space:]]*#' "$file" | grep -v '^[[:space:]]*$' | sed 's/^/    /'
+            done
+            ;;
+        add)
+            local name="${1:-}" url="${2:-}" suite="stable" component="main" keyring=""
+            if [ -z "$name" ] || [ -z "$url" ]; then
+                die "usage: tn repo add NAME URL [SUITE [COMPONENT]] [--keyring FILE]"
+            fi
+            shift 2
+            local positional=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --keyring)
+                        keyring="${2:-}"
+                        [ -n "$keyring" ] || die "--keyring needs a file"
+                        shift 2
+                        ;;
+                    *)
+                        positional+=("$1")
+                        shift
+                        ;;
+                esac
+            done
+            if [ "${#positional[@]}" -ge 1 ]; then
+                suite="${positional[0]}"
+            fi
+            if [ "${#positional[@]}" -ge 2 ]; then
+                component="${positional[1]}"
+            fi
+
+            case "$name" in
+                [a-z0-9]*) ;;
+                *) die "repository name must start with a lowercase letter or digit" ;;
+            esac
+            case "$name" in
+                *[!a-z0-9_-]*) die "repository name may only contain a-z, 0-9, _ and -" ;;
+            esac
+            case "$url" in
+                https://*) ;;
+                *) die "repository URL must start with https://" ;;
+            esac
+            if [ -e "$LIST_DIR/$name.list" ] || [ -e "$LIST_DIR/$name.list.disabled" ]; then
+                die "repository '$name' already exists"
+            fi
+
+            mkdir -p "$LIST_DIR"
+            local options=""
+            if [ -n "$keyring" ]; then
+                [ -f "$keyring" ] || die "keyring file not found: $keyring"
+                mkdir -p "$APT_DIR/keyrings"
+                cp "$keyring" "$APT_DIR/keyrings/$name.gpg"
+                options="[signed-by=$APT_DIR/keyrings/$name.gpg] "
+            fi
+            printf 'deb %s%s %s %s\n' "$options" "$url" "$suite" "$component" > "$LIST_DIR/$name.list"
+            echo "Added repository '$name'. Run: tn update"
+            ;;
+        remove)
+            local name="${1:-}"
+            [ -n "$name" ] || die "usage: tn repo remove NAME"
+            if [ ! -e "$LIST_DIR/$name.list" ] && [ ! -e "$LIST_DIR/$name.list.disabled" ]; then
+                die "repository '$name' does not exist"
+            fi
+            rm -f "$LIST_DIR/$name.list" "$LIST_DIR/$name.list.disabled" "$APT_DIR/keyrings/$name.gpg"
+            echo "Removed repository '$name'"
+            ;;
+        enable)
+            local name="${1:-}"
+            [ -n "$name" ] || die "usage: tn repo enable NAME"
+            [ -f "$LIST_DIR/$name.list.disabled" ] || die "no disabled repository named '$name'"
+            mv "$LIST_DIR/$name.list.disabled" "$LIST_DIR/$name.list"
+            echo "Enabled repository '$name'. Run: tn update"
+            ;;
+        disable)
+            local name="${1:-}"
+            [ -n "$name" ] || die "usage: tn repo disable NAME"
+            [ -f "$LIST_DIR/$name.list" ] || die "no enabled repository named '$name'"
+            mv "$LIST_DIR/$name.list" "$LIST_DIR/$name.list.disabled"
+            echo "Disabled repository '$name'. Run: tn update"
+            ;;
+        *)
+            die "unknown repo command: $action"
+            ;;
+    esac
+}
+
+community_cmd() {
+    local action="${1:-status}" assume_yes=0
+    if [ $# -gt 0 ]; then
+        shift
+    fi
+    if [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ]; then
+        assume_yes=1
+    fi
+
+    case "$action" in
+        status)
+            if [ -f "$LIST_DIR/community.list" ]; then
+                echo "The community repository is enabled."
+            elif [ -f "$LIST_DIR/community.list.disabled" ]; then
+                echo "The community repository is configured but disabled."
+            else
+                echo "The community repository is not configured."
+            fi
+            ;;
+        enable)
+            if [ -f "$LIST_DIR/community.list" ]; then
+                echo "The community repository is already enabled."
+                return 0
+            fi
+            if [ -f "$LIST_DIR/community.list.disabled" ]; then
+                repo_cmd enable community
+                return
+            fi
+
+            [ -n "${TERM_APP_ID:-}" ] || die "TERM_APP_ID is not set"
+            need curl
+
+            if [ "$assume_yes" -ne 1 ]; then
+                cat <<'EOF'
+Community packages come from recipes contributed by third parties. They are
+reviewed before they are built, but they are not part of the main repository
+and package scripts run on this device when you install them.
+EOF
+                printf 'Enable the community repository? [y/N] '
+                local answer=""
+                read -r answer || true
+                case "$answer" in
+                    y|Y|yes|YES) ;;
+                    *)
+                        echo "Cancelled."
+                        return 1
+                        ;;
+                esac
+            fi
+
+            local key
+            key="$(mktemp)"
+            if ! curl -fsSL "$COMMUNITY_BASE/term-community.gpg" -o "$key" || [ ! -s "$key" ]; then
+                rm -f "$key"
+                die "unable to download the community signing key"
+            fi
+            repo_cmd add community "$COMMUNITY_BASE/$TERM_APP_ID" stable main --keyring "$key"
+            rm -f "$key"
+            ;;
+        disable)
+            repo_cmd disable community
+            ;;
+        *)
+            die "unknown community command: $action"
+            ;;
+    esac
+}
+
+doctor() {
+    local failed=0
+
+    check_tool() {
+        if command -v "$2" >/dev/null 2>&1; then
+            printf '  [ ok ] %s\n' "$1"
+        else
+            printf '  [FAIL] %s (%s not found)\n' "$1" "$2"
+            failed=1
+        fi
+    }
+
+    echo "tn $TN_VERSION - environment check"
+    echo "  PREFIX = $PREFIX"
+    echo "  HOME   = ${HOME:-unset}"
+    echo
+    check_tool "bash" bash
+    check_tool "apt" apt
+    check_tool "dpkg" dpkg
+    check_tool "curl" curl
+    check_tool "tar" tar
+
+    if [ -d "$APT_DIR" ]; then
+        printf '  [ ok ] apt configuration directory\n'
+    else
+        printf '  [FAIL] apt configuration directory (%s missing)\n' "$APT_DIR"
+        failed=1
+    fi
+
+    if [ -f "$APT_DIR/sources.list" ] || ls "$LIST_DIR"/*.list >/dev/null 2>&1; then
+        printf '  [ ok ] at least one repository is enabled\n'
+    else
+        printf '  [FAIL] no repository is enabled (see: tn repo add)\n'
+        failed=1
+    fi
+
+    echo
+    if [ "$failed" -eq 0 ]; then
+        echo "Everything looks good."
+        return 0
+    fi
+    echo "Some checks failed."
+    return 1
+}
+
+cmd="${1:-help}"
+if [ $# -gt 0 ]; then
+    shift
+fi
+
+case "$cmd" in
+    update)
+        need apt
+        apt update "$@"
+        ;;
+    upgrade)
+        need apt
+        apt update || die "unable to refresh the package lists"
+        apt upgrade "$@"
+        ;;
+    install|add|i)
+        [ $# -gt 0 ] || die "install needs at least one package"
+        need apt
+        apt install "$@"
+        ;;
+    remove|rm)
+        [ $# -gt 0 ] || die "remove needs at least one package"
+        need apt
+        apt remove "$@"
+        ;;
+    purge)
+        [ $# -gt 0 ] || die "purge needs at least one package"
+        need apt
+        apt purge "$@"
+        ;;
+    autoremove)
+        need apt
+        apt autoremove "$@"
+        ;;
+    search|s)
+        [ $# -gt 0 ] || die "search needs a term"
+        need apt
+        apt search "$@"
+        ;;
+    show|info)
+        [ $# -gt 0 ] || die "show needs a package"
+        need apt
+        apt show "$@"
+        ;;
+    list|ls)
+        need apt
+        apt list "$@"
+        ;;
+    files)
+        [ $# -eq 1 ] || die "usage: tn files PKG"
+        need dpkg
+        dpkg -L "$1"
+        ;;
+    owns)
+        [ $# -eq 1 ] || die "usage: tn owns FILE"
+        need dpkg
+        dpkg -S "$1"
+        ;;
+    clean)
+        need apt
+        apt clean
+        ;;
+    repo)
+        repo_cmd "$@"
+        ;;
+    community)
+        community_cmd "$@"
+        ;;
+    doctor)
+        doctor
+        ;;
+    version|-v|--version)
+        echo "tn $TN_VERSION"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        die "unknown command: $cmd (try: tn help)"
+        ;;
+esac

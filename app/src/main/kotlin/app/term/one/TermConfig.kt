@@ -5,23 +5,16 @@ import java.io.File
 object TermConfig {
 
     private const val DEFAULT_TERM_PROPERTIES = """# TermOne configuration
-# Font size in sp
+# Font size in sp (8-40)
 font-size=14
-# Terminal type exported to TERM
-term-type=xterm-256color
-# Enable inline image protocols
-sixel=true
-iterm2-images=true
 # Show session tabs at the top
 session-tabs-top=true
-# Maximum sessions in combined view (1-4)
-max-combined-sessions=4
 # Bell behavior: vibrate, beep, ignore
 bell=vibrate
 # Cursor style: block, underline, bar
 cursor-style=block
 cursor-blink=true
-# Scrollback lines
+# Scrollback lines for new sessions (100-50000)
 scrollback=2000
 """
 

@@ -16,6 +16,8 @@ cursor-style=block
 cursor-blink=true
 # Scrollback lines for new sessions (100-50000)
 scrollback=2000
+# Allow other apps to run commands (they also need the RUN_COMMAND permission)
+allow-external-apps=false
 """
 
     private const val DEFAULT_EXTRAKEYS = """# Extra keys layout, keys separated by comma

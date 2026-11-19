@@ -40,6 +40,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
 import app.term.one.core.CombineResult
 import app.term.one.core.SessionManager
 import app.term.one.core.TerminalSession
@@ -96,6 +97,10 @@ class MainActivity : AppCompatActivity(),
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private var pendingStorageToken: String? = null
+
+    private val intents by lazy { TermIntents(this, paths) { snack(it) } }
+    private val pendingRequests = ArrayDeque<Pair<String, Map<String, String>>>()
+    private var requestShowing = false
 
     private val storagePermission =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
@@ -415,6 +420,39 @@ class MainActivity : AppCompatActivity(),
     override fun onTermCommand(session: TerminalSession, name: String, args: Map<String, String>) {
         when (name) {
             "storage" -> setupStorage(args["token"].orEmpty())
+            "open", "share" -> enqueueRequest(name, args)
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        processRequests()
+    }
+
+    private fun enqueueRequest(name: String, args: Map<String, String>) {
+        if (pendingRequests.size >= 5) {
+            return
+        }
+        pendingRequests.addLast(Pair(name, args))
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            processRequests()
+        }
+    }
+
+    private fun processRequests() {
+        if (requestShowing) {
+            return
+        }
+        val next = pendingRequests.removeFirstOrNull() ?: return
+        requestShowing = true
+        val finished = {
+            requestShowing = false
+            processRequests()
+        }
+        when (next.first) {
+            "open" -> intents.open(next.second, finished)
+            "share" -> intents.share(next.second, finished)
+            else -> finished()
         }
     }
 

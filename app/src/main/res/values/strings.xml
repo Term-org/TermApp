@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="permission_run_command_label">Run commands in the terminal</string>
+    <string name="permission_run_command_description">Allows this app to run commands with the programs and files of the terminal app. Only grant it to apps you trust.</string>
+</resources>

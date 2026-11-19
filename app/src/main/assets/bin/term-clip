@@ -1,0 +1,133 @@
+# term-clip - read and write the Term clipboard
+#
+# Usage: term-clip set [TEXT...]
+#        term-clip get [N]
+#        term-clip list
+#        term-clip clear
+
+set -u
+
+usage() {
+    cat <<'EOF'
+term-clip - read and write the Term clipboard
+
+Usage:
+  term-clip set [TEXT...]   Copy TEXT, or the standard input when no text is given
+  term-clip get [N]         Print entry N (1 = newest, the default)
+  term-clip list            List the stored entries
+  term-clip clear           Remove all entries
+
+Examples:
+  git diff | term-clip set
+  term-clip get | wc -l
+EOF
+}
+
+action="${1:-}"
+if [ $# -gt 0 ]; then
+    shift
+fi
+
+if ! command -v base64 >/dev/null 2>&1; then
+    echo "term-clip: base64 was not found" >&2
+    exit 1
+fi
+
+encode() {
+    printf '%s' "$1" | base64 -w0
+}
+
+history_dir() {
+    if [ -z "${DOCS:-}" ]; then
+        echo "term-clip: DOCS is not set" >&2
+        exit 1
+    fi
+    printf '%s' "$DOCS/.term_clipboard_history"
+}
+
+entries() {
+    ls -1 "$1" 2>/dev/null | sort -r
+}
+
+case "$action" in
+    set)
+        tmp="$(mktemp "${TMPDIR:-/tmp}/term-clip.XXXXXX")" || exit 1
+        if [ $# -gt 0 ]; then
+            printf '%s' "$*" > "$tmp"
+        elif [ -t 0 ]; then
+            rm -f "$tmp"
+            echo "term-clip: give the text as arguments or pipe it into the command" >&2
+            exit 2
+        else
+            cat > "$tmp"
+        fi
+        if [ ! -s "$tmp" ]; then
+            rm -f "$tmp"
+            echo "term-clip: nothing to copy" >&2
+            exit 1
+        fi
+        path="$(readlink -f -- "$tmp")"
+        printf '\033]1337;TermCmd=clip;action=%s;path=%s\a' "$(encode set)" "$(encode "$path")"
+
+        waited=0
+        while [ -e "$tmp" ] && [ "$waited" -lt 20 ]; do
+            sleep 0.5
+            waited=$((waited + 1))
+        done
+        if [ -e "$tmp" ]; then
+            rm -f "$tmp"
+            echo "term-clip: the app did not respond" >&2
+            exit 1
+        fi
+        ;;
+    get)
+        n="${1:-1}"
+        case "$n" in
+            ''|*[!0-9]*|0)
+                echo "term-clip: N must be a positive number" >&2
+                exit 2
+                ;;
+        esac
+        dir="$(history_dir)" || exit 1
+        entry="$(entries "$dir" | sed -n "${n}p")"
+        if [ -z "$entry" ]; then
+            echo "term-clip: there is no entry $n" >&2
+            exit 1
+        fi
+        cat "$dir/$entry"
+        ;;
+    list)
+        dir="$(history_dir)" || exit 1
+        i=0
+        for entry in $(entries "$dir"); do
+            i=$((i + 1))
+            size="$(wc -c < "$dir/$entry" | tr -d ' ')"
+            snippet="$(head -c 60 "$dir/$entry" | tr '\n\r\t' '   ')"
+            printf '%2d  %9s bytes  %s\n' "$i" "$size" "$snippet"
+        done
+        if [ "$i" -eq 0 ]; then
+            echo "The Term clipboard is empty."
+        fi
+        ;;
+    clear)
+        dir="$(history_dir)" || exit 1
+        printf '\033]1337;TermCmd=clip;action=%s\a' "$(encode clear)"
+        waited=0
+        while [ -n "$(entries "$dir")" ] && [ "$waited" -lt 10 ]; do
+            sleep 0.5
+            waited=$((waited + 1))
+        done
+        if [ -n "$(entries "$dir")" ]; then
+            echo "term-clip: the app did not respond" >&2
+            exit 1
+        fi
+        echo "Cleared."
+        ;;
+    -h|--help|help)
+        usage
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

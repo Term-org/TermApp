@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import app.term.one.core.SessionManager
+import app.term.one.core.TerminalSession
 
 class TermService : Service() {
 
@@ -21,6 +22,8 @@ class TermService : Service() {
 
     private val binder = LocalBinder()
     private lateinit var notificationManager: NotificationManager
+    private lateinit var paths: TermPaths
+    private lateinit var commands: TermCommands
 
     lateinit var manager: SessionManager
         private set
@@ -36,13 +39,19 @@ class TermService : Service() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
+
+        override fun onTermCommand(session: TerminalSession, name: String, args: Map<String, String>) {
+            commands.handle(name, args)
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
         notificationManager = getSystemService(NotificationManager::class.java)
         createChannel()
-        manager = SessionManager(TermPaths.get(this))
+        paths = TermPaths.get(this)
+        commands = TermCommands(this, paths)
+        manager = SessionManager(paths)
         manager.addListener(managerListener)
         enterForeground()
     }
@@ -53,6 +62,9 @@ class TermService : Service() {
             return START_NOT_STICKY
         }
         enterForeground()
+        if (intent?.action == ACTION_RUN) {
+            runSession(intent)
+        }
         return START_NOT_STICKY
     }
 
@@ -62,6 +74,19 @@ class TermService : Service() {
         manager.removeListener(managerListener)
         manager.closeAll()
         super.onDestroy()
+    }
+
+    // Starts a visible session for a command that another app asked for (RUN_COMMAND).
+    private fun runSession(intent: Intent) {
+        val path = intent.getStringExtra(RunCommand.EXTRA_PATH) ?: return
+        val args = intent.getStringArrayExtra(RunCommand.EXTRA_ARGUMENTS)?.toList() ?: emptyList()
+        val dir = intent.getStringExtra(RunCommand.EXTRA_WORKDIR)
+        val settings = TermSettings.load(paths.termProperties)
+        try {
+            manager.createSession(80, 24, settings.scrollback, path, args, dir)
+        } catch (e: RuntimeException) {
+            return
+        }
     }
 
     private fun createChannel() {
@@ -117,8 +142,9 @@ class TermService : Service() {
             .build()
     }
 
-    private companion object {
-        const val CHANNEL_ID = "term_sessions"
-        const val NOTIFICATION_ID = 1
+    companion object {
+        const val ACTION_RUN = "app.term.one.action.RUN_SESSION"
+        private const val CHANNEL_ID = "term_sessions"
+        private const val NOTIFICATION_ID = 1
     }
 }

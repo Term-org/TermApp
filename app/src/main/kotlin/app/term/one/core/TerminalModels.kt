@@ -19,4 +19,5 @@ interface TerminalCallbacks {
     fun onClipboardSet(text: String)
     fun onCwdChanged(cwd: String)
     fun onVncRequest(args: Map<String, String>) {}
+    fun onTermCommand(name: String, args: Map<String, String>) {}
 }

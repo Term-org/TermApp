@@ -32,6 +32,9 @@ object TermEnvironment {
         env["DOCS"] = paths.docs.absolutePath
         env["PATH"] = "${paths.bin.absolutePath}:/system/bin:/system/xbin"
         env["SHELL"] = if (paths.bash.canExecute()) paths.bash.absolutePath else "/system/bin/sh"
+        if (!paths.bash.canExecute()) {
+            env["ENV"] = paths.systemMkshrc.absolutePath
+        }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["LANG"] = "en_US.UTF-8"

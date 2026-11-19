@@ -2,9 +2,11 @@ package app.term.one.core
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import app.term.one.TermEnvironment
 import app.term.one.TermPaths
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -26,9 +28,12 @@ class TerminalSession(
         fun onCwdChanged(session: TerminalSession, cwd: String)
         fun onExited(session: TerminalSession, exitCode: Int)
         fun onVncRequest(session: TerminalSession, args: Map<String, String>)
+        fun onTermCommand(session: TerminalSession, name: String, args: Map<String, String>)
     }
 
     val emulator = TerminalEmulator(cols, rows, this, maxScrollback = scrollback)
+
+    val startedAt: Long = SystemClock.elapsedRealtime()
 
     @Volatile
     var title: String = "Session $id"
@@ -48,6 +53,10 @@ class TerminalSession(
     @Volatile
     private var pid = -1
 
+    // Every process started from this session inherits this value, which lets
+    // killRemnants() find daemons that detached from the shell.
+    private val token: String = UUID.randomUUID().toString()
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val updatePosted = AtomicBoolean(false)
     private val writer: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
@@ -59,16 +68,22 @@ class TerminalSession(
     fun start(command: String? = null, args: List<String> = emptyList(), workDir: String? = null) {
         check(ptyFd < 0) { "Session already started" }
 
-        val executable = command
-            ?: if (paths.bash.canExecute()) paths.bash.absolutePath else "/system/bin/sh"
+        val bashReady = paths.bash.canExecute()
+        val executable = command ?: if (bashReady) paths.bash.absolutePath else "/system/bin/sh"
         val name = File(executable).name
-        val argv: Array<String> = if (command == null) arrayOf("-$name") else arrayOf(name) + args
+        val argv: Array<String> = when {
+            command != null -> arrayOf(name) + args
+            bashReady -> arrayOf(name, "--rcfile", paths.systemBashrc.absolutePath)
+            else -> arrayOf(name)
+        }
         val dir = workDir ?: paths.home.absolutePath
         File(dir).mkdirs()
 
+        val environment = TermEnvironment.build(paths) + "TERM_SESSION_ID=$token"
+
         val outPid = IntArray(1)
         val fd = NativePty.open(
-            executable, argv, TermEnvironment.build(paths), dir,
+            executable, argv, environment, dir,
             emulator.rows, emulator.cols, outPid
         )
         pid = outPid[0]
@@ -103,6 +118,7 @@ class TerminalSession(
         ptyFd = -1
         NativePty.close(fd)
         exitCode = code
+        killRemnants()
         writer.shutdown()
         mainHandler.post { listener.onExited(this, code) }
     }
@@ -140,6 +156,12 @@ class TerminalSession(
         if (p > 0 && exitCode == null) {
             NativePty.kill(p, 9)
         }
+        killRemnants()
+    }
+
+    // Kills every process that was started from this session, including daemons.
+    fun killRemnants() {
+        NativePty.killSession(token)
     }
 
     override fun onWriteToPty(data: ByteArray) {
@@ -161,6 +183,10 @@ class TerminalSession(
 
     override fun onVncRequest(args: Map<String, String>) {
         mainHandler.post { listener.onVncRequest(this, args) }
+    }
+
+    override fun onTermCommand(name: String, args: Map<String, String>) {
+        mainHandler.post { listener.onTermCommand(this, name, args) }
     }
 
     override fun onCwdChanged(cwd: String) {

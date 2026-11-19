@@ -73,6 +73,7 @@ class MainActivity : AppCompatActivity(),
     private lateinit var extraKeys: ExtraKeysView
     private lateinit var terminalFrame: FrameLayout
     private lateinit var selectionBar: LinearLayout
+    private lateinit var tabArea: FrameLayout
 
     private val modifiers = KeyModifiers()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -93,6 +94,19 @@ class MainActivity : AppCompatActivity(),
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    private var pendingStorageToken: String? = null
+
+    private val storagePermission =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+            val token = pendingStorageToken
+            pendingStorageToken = null
+            if (token != null && results.values.all { it }) {
+                finishStorageSetup(token)
+            } else {
+                snack("Storage permission was denied")
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -174,19 +188,21 @@ class MainActivity : AppCompatActivity(),
         split = SplitContainer(this) { createTerminalView() }
         extraKeys = ExtraKeysView(this, modifiers).also { it.listener = this }
         selectionBar = buildSelectionBar()
+        tabArea = FrameLayout(this).apply {
+            addView(
+                tabBar,
+                FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            )
+            addView(
+                selectionBar,
+                FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            )
+        }
 
         terminalFrame = FrameLayout(this).apply {
             addView(
                 split,
                 FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            )
-            addView(
-                selectionBar,
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                ).apply { topMargin = (8 * dp).toInt() }
             )
         }
 
@@ -222,12 +238,12 @@ class MainActivity : AppCompatActivity(),
         val termParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         val keyParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         if (settings.sessionTabsTop) {
-            root.addView(tabBar, tabParams)
+            root.addView(tabArea, tabParams)
             root.addView(terminalFrame, termParams)
             root.addView(extraKeys, keyParams)
         } else {
             root.addView(terminalFrame, termParams)
-            root.addView(tabBar, tabParams)
+            root.addView(tabArea, tabParams)
             root.addView(extraKeys, keyParams)
         }
     }
@@ -236,11 +252,8 @@ class MainActivity : AppCompatActivity(),
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             visibility = View.GONE
-            elevation = 8 * dp
-            background = GradientDrawable().apply {
-                cornerRadius = 10 * dp
-                setColor(Color.parseColor("#1E293B"))
-            }
+            isClickable = true
+            setBackgroundColor(Color.parseColor("#1E293B"))
         }
         fun action(label: String, onClick: () -> Unit) {
             val view = TextView(this).apply {
@@ -248,10 +261,9 @@ class MainActivity : AppCompatActivity(),
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
-                setPadding((16 * dp).toInt(), (10 * dp).toInt(), (16 * dp).toInt(), (10 * dp).toInt())
                 setOnClickListener { onClick() }
             }
-            bar.addView(view)
+            bar.addView(view, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         }
         action("Copy") { copySelection() }
         action("Select all") { selectionOwner?.selectAll() }
@@ -398,6 +410,45 @@ class MainActivity : AppCompatActivity(),
     override fun onAllSessionsClosed() {
         stopService(Intent(this, TermService::class.java))
         finishAndRemoveTask()
+    }
+
+    override fun onTermCommand(session: TerminalSession, name: String, args: Map<String, String>) {
+        when (name) {
+            "storage" -> setupStorage(args["token"].orEmpty())
+        }
+    }
+
+    private fun setupStorage(token: String) {
+        if (token.isEmpty()) {
+            return
+        }
+        val granted =
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+                PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            finishStorageSetup(token)
+        } else {
+            pendingStorageToken = token
+            storagePermission.launch(
+                arrayOf(
+                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                )
+            )
+        }
+    }
+
+    private fun finishStorageSetup(token: String) {
+        try {
+            val count = TermStorage.setup(this, paths, token)
+            snack("Storage ready: $count folders linked in ~/storage")
+        } catch (e: android.system.ErrnoException) {
+            snack("Unable to set up storage: ${e.message}")
+        } catch (e: java.io.IOException) {
+            snack("Unable to set up storage: ${e.message}")
+        }
     }
 
     override fun onVncRequest(session: TerminalSession, args: Map<String, String>) {

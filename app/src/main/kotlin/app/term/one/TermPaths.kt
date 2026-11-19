@@ -19,6 +19,9 @@ class TermPaths private constructor(context: Context) {
     val tmp: File = File(filesDir, "temp")
     val docs: File = File(filesDir, "docs")
     val configDir: File = File(home, ".term")
+    val systemDir: File = File(rootDir, "system")
+    val systemBashrc: File = File(systemDir, "bashrc")
+    val systemMkshrc: File = File(systemDir, "mkshrc")
 
     val bin: File = File(prefix, "bin")
     val lib: File = File(prefix, "lib")
@@ -34,7 +37,7 @@ class TermPaths private constructor(context: Context) {
     fun isBootstrapped(): Boolean = bootstrapMarker.isFile && bash.canExecute()
 
     fun ensureDirectories() {
-        listOf(rootDir, home, tmp, docs, configDir).forEach { dir ->
+        listOf(rootDir, home, tmp, docs, configDir, systemDir).forEach { dir ->
             if (!dir.exists()) {
                 dir.mkdirs()
             }

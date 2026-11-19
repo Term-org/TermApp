@@ -1,0 +1,59 @@
+# term-storage - give the terminal access to the shared storage of the device
+#
+# Usage: term-storage
+#
+# Asks Android for the storage permission when needed and links the shared folders
+# into ~/storage (shared, downloads, dcim, pictures, music, movies).
+
+set -u
+
+case "${1:-}" in
+    -h|--help)
+        cat <<'EOF'
+term-storage - give the terminal access to the shared storage of the device
+
+Usage: term-storage
+
+Links these folders into ~/storage once the permission is granted:
+  shared      the whole shared storage
+  downloads   Download
+  dcim        DCIM
+  pictures    Pictures
+  music       Music
+  movies      Movies
+  external-N  app folders on removable storage, when present
+EOF
+        exit 0
+        ;;
+    "")
+        ;;
+    *)
+        echo "term-storage: unexpected argument: $1" >&2
+        exit 2
+        ;;
+esac
+
+if ! command -v base64 >/dev/null 2>&1; then
+    echo "term-storage: base64 was not found" >&2
+    exit 1
+fi
+
+token="$$-$RANDOM-$(date +%s)"
+encoded="$(printf '%s' "$token" | base64 -w0)"
+target="$HOME/storage"
+
+printf '\033]1337;TermCmd=storage;token=%s\a' "$encoded"
+echo "Waiting for the storage permission..."
+
+waited=0
+while [ "$waited" -lt 120 ]; do
+    if [ "$(cat "$target/.token" 2>/dev/null)" = "$token" ]; then
+        echo "Done. The shared folders are linked in ~/storage."
+        exit 0
+    fi
+    sleep 0.5
+    waited=$((waited + 1))
+done
+
+echo "term-storage: the permission was not granted. Run the command again and allow access." >&2
+exit 1

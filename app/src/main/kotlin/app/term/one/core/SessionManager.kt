@@ -1,5 +1,6 @@
 package app.term.one.core
 
+import android.os.SystemClock
 import app.term.one.TermPaths
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.min
@@ -28,6 +29,7 @@ class SessionManager(private val paths: TermPaths) : TerminalSession.Listener {
         fun onSessionClipboard(session: TerminalSession, text: String) {}
         fun onAllSessionsClosed() {}
         fun onVncRequest(session: TerminalSession, args: Map<String, String>) {}
+        fun onTermCommand(session: TerminalSession, name: String, args: Map<String, String>) {}
     }
 
     private val listeners = CopyOnWriteArrayList<Listener>()
@@ -242,6 +244,10 @@ class SessionManager(private val paths: TermPaths) : TerminalSession.Listener {
         listeners.forEach { it.onSessionClipboard(session, text) }
     }
 
+    override fun onTermCommand(session: TerminalSession, name: String, args: Map<String, String>) {
+        listeners.forEach { it.onTermCommand(session, name, args) }
+    }
+
     override fun onVncRequest(session: TerminalSession, args: Map<String, String>) {
         listeners.forEach { it.onVncRequest(session, args) }
     }
@@ -253,7 +259,13 @@ class SessionManager(private val paths: TermPaths) : TerminalSession.Listener {
         if (!items.contains(session)) {
             return
         }
-        val message = "\r\n[Process completed (code $exitCode) - press Enter to close]\r\n"
+        val failedToStart = (exitCode == 126 || exitCode == 127) &&
+            SystemClock.elapsedRealtime() - session.startedAt < 3000
+        if (!failedToStart) {
+            close(session)
+            return
+        }
+        val message = "\r\n[Unable to start the shell (code $exitCode) - press Enter to close]\r\n"
         val bytes = message.toByteArray(Charsets.UTF_8)
         session.emulator.feed(bytes, 0, bytes.size)
         listeners.forEach {

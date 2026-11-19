@@ -1135,6 +1135,26 @@ class TerminalEmulator(
                 } else if (startsWith(data, payload, n, "TermVnc=")) {
                     val raw = String(data, payload + 8, n - payload - 8, Charsets.UTF_8)
                     callbacks.onVncRequest(parseVncArgs(raw))
+                } else if (startsWith(data, payload, n, "TermCmd=")) {
+                    val raw = String(data, payload + 8, n - payload - 8, Charsets.UTF_8)
+                    val parts = raw.split(';')
+                    val name = parts[0].trim()
+                    if (name.isNotEmpty()) {
+                        val args = HashMap<String, String>()
+                        for (i in 1 until parts.size) {
+                            val eq = parts[i].indexOf('=')
+                            if (eq <= 0) {
+                                continue
+                            }
+                            try {
+                                val decoded = Base64.decode(parts[i].substring(eq + 1), Base64.DEFAULT)
+                                args[parts[i].substring(0, eq).trim()] = String(decoded, Charsets.UTF_8)
+                            } catch (e: IllegalArgumentException) {
+                                continue
+                            }
+                        }
+                        callbacks.onTermCommand(name, args)
+                    }
                 }
             }
         }

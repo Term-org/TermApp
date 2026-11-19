@@ -1,5 +1,7 @@
 #include <jni.h>
 #include <errno.h>
+#include <dirent.h>
+#include <stdio.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -252,4 +254,90 @@ Java_app_term_one_core_NativePty_kill(JNIEnv *env, jclass clazz, jint pid, jint 
 JNIEXPORT void JNICALL
 Java_app_term_one_core_NativePty_close(JNIEnv *env, jclass clazz, jint fd) {
     close(fd);
+}
+
+#define ENV_LIMIT (256 * 1024)
+
+static int env_has_entry(const char *data, size_t length, const char *entry, size_t entry_length) {
+    size_t start = 0;
+
+    while (start < length) {
+        size_t end = start;
+        while (end < length && data[end] != '\0') {
+            end++;
+        }
+        if (end - start == entry_length && memcmp(data + start, entry, entry_length) == 0) {
+            return 1;
+        }
+        start = end + 1;
+    }
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_term_one_core_NativePty_killSession(JNIEnv *env, jclass clazz, jstring jtoken) {
+    const char *token = (*env)->GetStringUTFChars(env, jtoken, NULL);
+    char entry[256];
+    char *buffer;
+    DIR *proc;
+    struct dirent *item;
+    pid_t self = getpid();
+    int killed = 0;
+    int entry_length;
+
+    if (token == NULL) {
+        return 0;
+    }
+    entry_length = snprintf(entry, sizeof(entry), "TERM_SESSION_ID=%s", token);
+    (*env)->ReleaseStringUTFChars(env, jtoken, token);
+    if (entry_length <= 0 || entry_length >= (int) sizeof(entry)) {
+        return 0;
+    }
+
+    buffer = (char *) malloc(ENV_LIMIT);
+    proc = opendir("/proc");
+    if (buffer == NULL || proc == NULL) {
+        free(buffer);
+        if (proc != NULL) {
+            closedir(proc);
+        }
+        return 0;
+    }
+
+    while ((item = readdir(proc)) != NULL) {
+        char *end = NULL;
+        long pid = strtol(item->d_name, &end, 10);
+        char path[64];
+        size_t length = 0;
+        int fd;
+
+        if (end == item->d_name || *end != '\0' || pid <= 1 || (pid_t) pid == self) {
+            continue;
+        }
+        snprintf(path, sizeof(path), "/proc/%ld/environ", pid);
+        fd = open(path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) {
+            continue;
+        }
+        while (length < ENV_LIMIT) {
+            ssize_t n = read(fd, buffer + length, ENV_LIMIT - length);
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+            if (n <= 0) {
+                break;
+            }
+            length += (size_t) n;
+        }
+        close(fd);
+
+        if (env_has_entry(buffer, length, entry, (size_t) entry_length)) {
+            kill((pid_t) pid, SIGKILL);
+            killed++;
+        }
+    }
+
+    closedir(proc);
+    free(buffer);
+    return killed;
 }

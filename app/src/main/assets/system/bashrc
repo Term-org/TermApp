@@ -1,0 +1,38 @@
+# System shell configuration of the Term apps.
+# This file is rewritten by the app on every start, so do not edit it.
+# Put your own settings in ~/.bashrc and ~/.bash_profile; both are loaded at the end.
+
+case $- in
+    *i*) ;;
+    *) return ;;
+esac
+
+# Scripts shipped by packages.
+if [ -d "$PREFIX/etc/profile.d" ]; then
+    for script in "$PREFIX"/etc/profile.d/*.sh; do
+        if [ -r "$script" ]; then
+            . "$script"
+        fi
+    done
+    unset script
+fi
+
+shopt -s checkwinsize histappend
+HISTSIZE=5000
+HISTFILESIZE=10000
+HISTCONTROL=ignoredups:erasedups
+
+PS1='\[\e[1;34m\]\W\[\e[0m\]\$ '
+
+alias ls='ls --color=auto'
+alias ll='ls -lAh'
+alias grep='grep --color=auto'
+alias ..='cd ..'
+
+# User configuration.
+if [ -r "$HOME/.bash_profile" ]; then
+    . "$HOME/.bash_profile"
+fi
+if [ -r "$HOME/.bashrc" ]; then
+    . "$HOME/.bashrc"
+fi

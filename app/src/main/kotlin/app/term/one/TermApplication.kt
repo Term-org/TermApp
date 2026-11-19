@@ -9,6 +9,7 @@ class TermApplication : Application() {
         val paths = TermPaths.get(this)
         paths.ensureDirectories()
         TermConfig.writeDefaults(paths)
+        TermShellFiles.install(this, paths)
         TermScripts.install(this, paths)
     }
 }

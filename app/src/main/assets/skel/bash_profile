@@ -1,5 +1,0 @@
-# ~/.bash_profile - read by login shells
-
-if [ -r "$HOME/.bashrc" ]; then
-    . "$HOME/.bashrc"
-fi

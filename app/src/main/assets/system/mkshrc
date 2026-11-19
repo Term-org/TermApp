@@ -1,0 +1,10 @@
+# System configuration of the Android shell, used until the bootstrap is installed.
+# This file is rewritten by the app on every start.
+
+PS1='$(if [ "$PWD" = "$HOME" ]; then printf "~"; elif [ "$PWD" = "/" ]; then printf "/"; else printf "%s" "${PWD##*/}"; fi)$ '
+
+HISTFILE="$HOME/.sh_history"
+HISTSIZE=2000
+
+alias ll='ls -lAh'
+alias ..='cd ..'

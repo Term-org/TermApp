@@ -34,4 +34,7 @@ object NativePty {
 
     @JvmStatic
     external fun close(fd: Int)
+
+    @JvmStatic
+    external fun killSession(token: String): Int
 }

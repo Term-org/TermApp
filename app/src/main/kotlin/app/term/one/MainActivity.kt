@@ -23,6 +23,7 @@ import android.provider.Settings
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
@@ -149,6 +150,31 @@ class MainActivity : AppCompatActivity(),
         val intent = Intent(this, TermService::class.java)
         ContextCompat.startForegroundService(this, intent)
         bound = bindService(intent, this, Context.BIND_AUTO_CREATE)
+    }
+
+    override fun onPause() {
+        modifiers.releaseHeld()
+        super.onPause()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        if (settings.volumeKeys &&
+            (code == KeyEvent.KEYCODE_VOLUME_DOWN || code == KeyEvent.KEYCODE_VOLUME_UP)
+        ) {
+            val key = if (code == KeyEvent.KEYCODE_VOLUME_DOWN) KeyModifiers.Key.CTRL else KeyModifiers.Key.ALT
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> modifiers.hold(key, true)
+                KeyEvent.ACTION_UP -> modifiers.hold(key, false)
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun reloadColors() {
+        manager?.sessions?.forEach { it.reloadTheme() }
+        split.allViews().forEach { it.invalidate() }
     }
 
     override fun onResume() {
@@ -284,6 +310,7 @@ class MainActivity : AppCompatActivity(),
             it.setFontSize(fontSizeSp)
         }
         extraKeys.setLayout(ExtraKeysConfig.load(paths.extraKeysProperties))
+        reloadColors()
         arrange()
     }
 
@@ -421,6 +448,7 @@ class MainActivity : AppCompatActivity(),
         when (name) {
             "storage" -> setupStorage(args["token"].orEmpty())
             "open", "share" -> enqueueRequest(name, args)
+            "theme" -> reloadColors()
         }
     }
 
@@ -867,6 +895,11 @@ class MainActivity : AppCompatActivity(),
             selectionOwner = null
             selectionBar.visibility = View.GONE
         }
+    }
+
+    override fun onZoom(sizeSp: Int) {
+        fontSizeSp = sizeSp.coerceIn(8, 40)
+        split.allViews().forEach { it.setFontSize(fontSizeSp) }
     }
 
     override fun onExitedEnter(session: TerminalSession) {

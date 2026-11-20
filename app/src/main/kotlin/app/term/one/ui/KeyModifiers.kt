@@ -2,6 +2,7 @@ package app.term.one.ui
 
 import android.os.SystemClock
 import java.util.EnumMap
+import java.util.EnumSet
 
 class KeyModifiers {
 
@@ -11,16 +12,37 @@ class KeyModifiers {
 
     private val states = EnumMap<Key, State>(Key::class.java)
     private val tapTimes = EnumMap<Key, Long>(Key::class.java)
+    private val held: MutableSet<Key> = EnumSet.noneOf(Key::class.java)
 
     var onChanged: (() -> Unit)? = null
 
-    fun state(key: Key): State = states[key] ?: State.OFF
+    private fun base(key: Key): State = states[key] ?: State.OFF
+
+    // A key that is physically held (a volume key) counts as active until it is released.
+    fun state(key: Key): State {
+        val current = base(key)
+        return if (current == State.OFF && held.contains(key)) State.ONCE else current
+    }
 
     fun isActive(key: Key): Boolean = state(key) != State.OFF
 
+    fun hold(key: Key, down: Boolean) {
+        val changed = if (down) held.add(key) else held.remove(key)
+        if (changed) {
+            onChanged?.invoke()
+        }
+    }
+
+    fun releaseHeld() {
+        if (held.isNotEmpty()) {
+            held.clear()
+            onChanged?.invoke()
+        }
+    }
+
     fun tap(key: Key) {
         val now = SystemClock.uptimeMillis()
-        val next = when (state(key)) {
+        val next = when (base(key)) {
             State.OFF -> State.ONCE
             State.ONCE -> if (now - (tapTimes[key] ?: 0L) < DOUBLE_TAP_MS) State.LOCKED else State.OFF
             State.LOCKED -> State.OFF
@@ -33,7 +55,7 @@ class KeyModifiers {
     fun consumeOneShot() {
         var changed = false
         for (key in Key.values()) {
-            if (state(key) == State.ONCE) {
+            if (base(key) == State.ONCE) {
                 states[key] = State.OFF
                 changed = true
             }

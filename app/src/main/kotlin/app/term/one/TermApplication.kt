@@ -10,6 +10,7 @@ class TermApplication : Application() {
         paths.ensureDirectories()
         TermConfig.writeDefaults(paths)
         TermShellFiles.install(this, paths)
+        TermThemeFiles.install(this, paths)
         TermScripts.install(this, paths)
     }
 }

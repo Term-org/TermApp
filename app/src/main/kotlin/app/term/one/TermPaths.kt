@@ -31,6 +31,7 @@ class TermPaths private constructor(context: Context) {
     val termProperties: File = File(configDir, "term.properties")
     val termFont: File = File(configDir, "term.ttf")
     val extraKeysProperties: File = File(configDir, "extrakeys.properties")
+    val colorsProperties: File = File(configDir, "colors.properties")
 
     val bootstrapMarker: File = File(rootDir, ".bootstrap-complete")
 

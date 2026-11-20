@@ -30,6 +30,7 @@ object TermEnvironment {
         env["HOME"] = paths.home.absolutePath
         env["TMPDIR"] = paths.tmp.absolutePath
         env["DOCS"] = paths.docs.absolutePath
+        env["TERM_SYSTEM_DIR"] = paths.systemDir.absolutePath
         env["PATH"] = "${paths.bin.absolutePath}:/system/bin:/system/xbin"
         env["SHELL"] = if (paths.bash.canExecute()) paths.bash.absolutePath else "/system/bin/sh"
         if (!paths.bash.canExecute()) {

@@ -11,7 +11,8 @@ data class TermSettings(
     val bell: String,
     val scrollback: Int,
     val sessionTabsTop: Boolean,
-    val allowExternalApps: Boolean
+    val allowExternalApps: Boolean,
+    val volumeKeys: Boolean
 ) {
     companion object {
         private val CURSOR_STYLES = setOf("block", "underline", "bar")
@@ -35,7 +36,8 @@ data class TermSettings(
                 bell = if (bell in BELLS) bell else "vibrate",
                 scrollback = (props.getProperty("scrollback")?.trim()?.toIntOrNull() ?: 2000).coerceIn(100, 50000),
                 sessionTabsTop = props.getProperty("session-tabs-top", "true").trim().toBoolean(),
-                allowExternalApps = props.getProperty("allow-external-apps", "false").trim().toBoolean()
+                allowExternalApps = props.getProperty("allow-external-apps", "false").trim().toBoolean(),
+                volumeKeys = props.getProperty("volume-keys", "true").trim().toBoolean()
             )
         }
     }

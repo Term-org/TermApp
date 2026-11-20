@@ -12,6 +12,7 @@ import android.os.Looper
 import android.text.InputType
 import android.util.TypedValue
 import android.view.GestureDetector
+import android.view.ScaleGestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -41,6 +42,7 @@ class TerminalView(context: Context, private val modifiers: KeyModifiers) : View
         fun onSelectionChanged(view: TerminalView, active: Boolean)
         fun onExitedEnter(session: TerminalSession)
         fun onPaneTouched(view: TerminalView)
+        fun onZoom(sizeSp: Int)
     }
 
     var listener: Listener? = null
@@ -127,6 +129,30 @@ class TerminalView(context: Context, private val modifiers: KeyModifiers) : View
             handleLongPress(e)
         }
     })
+
+    private var zooming = false
+    private var zoomStart = 14f
+    private var zoomFactor = 1f
+
+    private val scaleDetector = ScaleGestureDetector(
+        context,
+        object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                zoomStart = textSizeSp.toFloat()
+                zoomFactor = 1f
+                return true
+            }
+
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                zoomFactor *= detector.scaleFactor
+                val target = (zoomStart * zoomFactor).roundToInt().coerceIn(8, 40)
+                if (target != textSizeSp) {
+                    listener?.onZoom(target)
+                }
+                return true
+            }
+        }
+    ).also { it.isQuickScaleEnabled = false }
 
     init {
         isFocusable = true
@@ -471,6 +497,27 @@ class TerminalView(context: Context, private val modifiers: KeyModifiers) : View
     // ------------------------------------------------------------------ touch
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        scaleDetector.onTouchEvent(event)
+        if (scaleDetector.isInProgress || zooming) {
+            if (!zooming) {
+                zooming = true
+                draggingHandle = 0
+                selectingByLongPress = false
+                val cancel = MotionEvent.obtain(event)
+                cancel.action = MotionEvent.ACTION_CANCEL
+                gestures.onTouchEvent(cancel)
+                cancel.recycle()
+            }
+            val action = event.actionMasked
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                zooming = false
+            }
+            return true
+        }
+        return handleTouch(event)
+    }
+
+    private fun handleTouch(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 listener?.onPaneTouched(this)

@@ -1,13 +1,16 @@
 name: Release
 
 on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v0.1.0 (must match versionName in app/build.gradle.kts)"
+        description: "Existing version tag to release, for example v0.2.0"
         required: true
       run_id:
-        description: "CI run to take the APKs from (empty = latest successful push run on main)"
+        description: "CI run to take the APKs from (empty = latest successful run for the tag)"
         required: false
         default: ""
 
@@ -22,45 +25,100 @@ concurrency:
 jobs:
   release:
     name: Sign and publish
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
-      - name: Check the tag
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
-            echo "The tag must look like v0.1.0" >&2
-            exit 1
-          fi
-
-      - name: Select the CI run
-        id: run
+      - name: Select the run and the commit
+        id: select
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_EVENT: ${{ github.event.workflow_run.id }}
+          SHA_EVENT: ${{ github.event.workflow_run.head_sha }}
+          TAG_INPUT: ${{ inputs.tag }}
+          RUN_INPUT: ${{ inputs.run_id }}
         run: |
-          if [ -z "$RUN_ID" ]; then
-            RUN_ID="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            run_id="$RUN_EVENT"
+            sha="$SHA_EVENT"
+          else
+            if ! [[ "$TAG_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "The tag must look like v1.2.3" >&2
+              exit 1
+            fi
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG_INPUT" --jq .sha)"
+            run_id="$RUN_INPUT"
+            if [ -z "$run_id" ]; then
+              run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$sha" --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+            fi
+            if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+              echo "No successful CI run was found for $TAG_INPUT" >&2
+              exit 1
+            fi
+            run_sha="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)"
+            if [ "$run_sha" != "$sha" ]; then
+              echo "CI run $run_id was built from $run_sha, not from $sha ($TAG_INPUT)" >&2
+              exit 1
+            fi
           fi
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "No successful CI run was found" >&2
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.select.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Read the version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SHA: ${{ steps.select.outputs.sha }}
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          name="$(bash scripts/version.sh get-name)"
+          code="$(bash scripts/version.sh get-code)"
+          tag="v$name"
+          release=false
+          if git tag --points-at "$SHA" | grep -qx "$tag"; then
+            release=true
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "The tag $tag does not point at $SHA" >&2
+            exit 1
+          else
+            echo "This commit is not tagged $tag, so there is nothing to release."
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$TAG_INPUT" != "$tag" ]; then
+            echo "The tag $TAG_INPUT does not match versionName $name of that commit (expected $tag)" >&2
             exit 1
           fi
-          SHA="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json headSha --jq '.headSha')"
-          echo "id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Using CI run $RUN_ID built from $SHA"
+          {
+            echo "name=$name"
+            echo "code=$code"
+            echo "tag=$tag"
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Download the built APKs
+        if: steps.version.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.select.outputs.run_id }}
         run: |
-          gh run download "${{ steps.run.outputs.id }}" --repo "$GITHUB_REPOSITORY" --name apks --dir unsigned
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name apks --dir unsigned
           ls -l unsigned
 
       - name: Sign the APKs
+        if: steps.version.outputs.release == 'true'
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
+          NAME: ${{ steps.version.outputs.name }}
+          CODE: ${{ steps.version.outputs.code }}
           KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
           KS_PASS: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
@@ -74,7 +132,6 @@ jobs:
           build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
           apksigner="$build_tools/apksigner"
           aapt2="$build_tools/aapt2"
-          version="${TAG#v}"
 
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           mkdir -p signed
@@ -94,8 +151,12 @@ jobs:
               echo "$src does not have the application id ${ids[$flavor]}" >&2
               exit 1
             fi
-            if ! grep -qF "versionName='$version'" <<<"$badging"; then
-              echo "$src does not have versionName $version; update app/build.gradle.kts and run CI again" >&2
+            if ! grep -qF "versionName='$NAME'" <<<"$badging"; then
+              echo "$src does not have versionName $NAME" >&2
+              exit 1
+            fi
+            if ! grep -qF "versionCode='$CODE'" <<<"$badging"; then
+              echo "$src does not have versionCode $CODE" >&2
               exit 1
             fi
 
@@ -118,12 +179,13 @@ jobs:
         run: rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Create the release
+        if: steps.version.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           gh release create "$TAG" signed/*.apk signed/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
-            --target "${{ steps.run.outputs.sha }}" \
+            --verify-tag \
             --title "$TAG" \
             --generate-notes

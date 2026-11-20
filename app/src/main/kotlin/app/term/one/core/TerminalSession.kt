@@ -31,7 +31,11 @@ class TerminalSession(
         fun onTermCommand(session: TerminalSession, name: String, args: Map<String, String>)
     }
 
-    val emulator = TerminalEmulator(cols, rows, this, maxScrollback = scrollback)
+    val emulator = TerminalEmulator(
+        cols, rows, this,
+        theme = TermTheme.create(paths),
+        maxScrollback = scrollback
+    )
 
     val startedAt: Long = SystemClock.elapsedRealtime()
 
@@ -121,6 +125,12 @@ class TerminalSession(
         killRemnants()
         writer.shutdown()
         mainHandler.post { listener.onExited(this, code) }
+    }
+
+    fun reloadTheme() {
+        synchronized(emulator.lock) {
+            TermTheme.apply(paths, emulator.theme)
+        }
     }
 
     fun write(data: ByteArray) {

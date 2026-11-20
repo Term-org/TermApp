@@ -5,11 +5,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import app.term.one.core.SessionManager
 import app.term.one.core.TerminalSession
@@ -25,10 +28,15 @@ class TermService : Service() {
     private lateinit var paths: TermPaths
     private lateinit var commands: TermCommands
 
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+    private val wakeHeld: Boolean get() = wakeLock?.isHeld == true
+
     lateinit var manager: SessionManager
         private set
 
     private val actionExit: String get() = "$packageName.action.EXIT"
+    private val actionWake: String get() = "$packageName.action.WAKELOCK"
 
     private val managerListener = object : SessionManager.Listener {
         override fun onSessionsChanged() {
@@ -36,12 +44,16 @@ class TermService : Service() {
         }
 
         override fun onAllSessionsClosed() {
+            releaseLocks()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
 
         override fun onTermCommand(session: TerminalSession, name: String, args: Map<String, String>) {
-            commands.handle(name, args)
+            when (name) {
+                "wakelock" -> setWakeLock(args["state"] == "1")
+                else -> commands.handle(name, args)
+            }
         }
     }
 
@@ -62,8 +74,11 @@ class TermService : Service() {
             return START_NOT_STICKY
         }
         enterForeground()
-        if (intent?.action == ACTION_RUN) {
-            runSession(intent)
+        if (intent != null) {
+            when (intent.action) {
+                ACTION_RUN -> runSession(intent)
+                actionWake -> setWakeLock(!wakeHeld)
+            }
         }
         return START_NOT_STICKY
     }
@@ -73,8 +88,50 @@ class TermService : Service() {
     override fun onDestroy() {
         manager.removeListener(managerListener)
         manager.closeAll()
+        releaseLocks()
         super.onDestroy()
     }
+
+    // ------------------------------------------------------------------ wake lock
+
+    private fun setWakeLock(enable: Boolean) {
+        if (enable == wakeHeld) {
+            return
+        }
+        if (enable) {
+            val power = getSystemService(PowerManager::class.java)
+            wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:sessions").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            @Suppress("DEPRECATION")
+            wifiLock = wifi?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "$packageName:wifi")?.apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } else {
+            releaseLocks()
+        }
+        notificationManager.notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun releaseLocks() {
+        wakeLock?.let {
+            if (it.isHeld) {
+                it.release()
+            }
+        }
+        wakeLock = null
+        wifiLock?.let {
+            if (it.isHeld) {
+                it.release()
+            }
+        }
+        wifiLock = null
+    }
+
+    // ------------------------------------------------------------------ sessions
 
     // Starts a visible session for a command that another app asked for (RUN_COMMAND).
     private fun runSession(intent: Intent) {
@@ -128,12 +185,20 @@ class TermService : Service() {
             Intent(this, TermService::class.java).setAction(actionExit),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val text = if (count == 1) "1 session running" else "$count sessions running"
+        val wakeIntent = PendingIntent.getService(
+            this,
+            2,
+            Intent(this, TermService::class.java).setAction(actionWake),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val sessions = if (count == 1) "1 session running" else "$count sessions running"
+        val text = if (wakeHeld) "$sessions, wake lock held" else sessions
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_term)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setContentIntent(openIntent)
+            .addAction(R.drawable.ic_stat_term, if (wakeHeld) "Release lock" else "Wake lock", wakeIntent)
             .addAction(R.drawable.ic_stat_term, "Exit", exitIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

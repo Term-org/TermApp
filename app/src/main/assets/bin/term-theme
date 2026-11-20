@@ -1,0 +1,149 @@
+# term-theme - list and apply color themes
+#
+# Usage: term-theme list | show NAME | set NAME | reset | current
+
+set -u
+
+system_dir="${TERM_SYSTEM_DIR:-/nonexistent}/themes"
+user_dir="$HOME/.term/themes"
+target="$HOME/.term/colors.properties"
+
+usage() {
+    cat <<'EOF'
+term-theme - list and apply color themes
+
+Usage:
+  term-theme list         List the available themes
+  term-theme show NAME    Preview a theme
+  term-theme set NAME     Apply a theme to every session
+  term-theme reset        Go back to the default colors
+  term-theme current      Show the theme that is in use
+
+Your own themes go in ~/.term/themes/NAME.properties. A theme is a list of
+foreground, background, cursor and color0 to color15 entries, for example:
+  background=#1A1B26
+  color1=#F7768E
+EOF
+}
+
+theme_file() {
+    local name="$1"
+    case "$name" in
+        ''|*[!A-Za-z0-9._-]*)
+            echo "term-theme: invalid theme name: $name" >&2
+            return 1
+            ;;
+    esac
+    if [ -f "$user_dir/$name.properties" ]; then
+        printf '%s' "$user_dir/$name.properties"
+        return 0
+    fi
+    if [ -f "$system_dir/$name.properties" ]; then
+        printf '%s' "$system_dir/$name.properties"
+        return 0
+    fi
+    echo "term-theme: no such theme: $name (try: term-theme list)" >&2
+    return 1
+}
+
+value_of() {
+    sed -n "s/^$2[[:space:]]*=[[:space:]]*//p" "$1" | head -n 1 | tr -d '[:space:]'
+}
+
+rgb_of() {
+    local hex="${1#\#}"
+    case "$hex" in
+        [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;;
+        *) return 1 ;;
+    esac
+    printf '%d;%d;%d' "0x${hex:0:2}" "0x${hex:2:2}" "0x${hex:4:2}"
+}
+
+preview() {
+    local file="$1" bg fg row i color rgb
+    bg="$(rgb_of "$(value_of "$file" background)")" || bg="0;0;0"
+    fg="$(rgb_of "$(value_of "$file" foreground)")" || fg="229;229;229"
+    printf '\033[48;2;%sm\033[38;2;%sm %-28s \033[0m\n' "$bg" "$fg" "The quick brown fox jumps"
+    for row in 0 8; do
+        for i in 0 1 2 3 4 5 6 7; do
+            color="$(value_of "$file" "color$((row + i))")"
+            if rgb="$(rgb_of "$color")"; then
+                printf '\033[48;2;%sm   \033[0m' "$rgb"
+            else
+                printf '   '
+            fi
+        done
+        printf '\n'
+    done
+}
+
+list_themes() {
+    local file name
+    for file in "$system_dir"/*.properties "$user_dir"/*.properties; do
+        [ -f "$file" ] || continue
+        name="$(basename "$file" .properties)"
+        if [ "$(dirname "$file")" = "$user_dir" ]; then
+            printf '%s (custom)\n' "$name"
+        else
+            printf '%s\n' "$name"
+        fi
+    done | sort -u
+}
+
+current_theme() {
+    local file
+    if [ ! -f "$target" ]; then
+        echo "default (no colors.properties)"
+        return 0
+    fi
+    for file in "$user_dir"/*.properties "$system_dir"/*.properties; do
+        [ -f "$file" ] || continue
+        if cmp -s "$file" "$target"; then
+            basename "$file" .properties
+            return 0
+        fi
+    done
+    echo "custom (colors.properties)"
+}
+
+reload() {
+    printf '\033]1337;TermCmd=theme\a'
+}
+
+case "${1:-}" in
+    list)
+        list_themes
+        ;;
+    show)
+        [ $# -eq 2 ] || { usage >&2; exit 2; }
+        file="$(theme_file "$2")" || exit 1
+        preview "$file"
+        ;;
+    set)
+        [ $# -eq 2 ] || { usage >&2; exit 2; }
+        file="$(theme_file "$2")" || exit 1
+        if ! grep -Eq '^(foreground|background|cursor|color[0-9]+)[[:space:]]*=' "$file"; then
+            echo "term-theme: $file does not contain any color" >&2
+            exit 1
+        fi
+        mkdir -p "$HOME/.term"
+        cp "$file" "$target" || exit 1
+        reload
+        echo "Theme applied: $2"
+        ;;
+    reset)
+        rm -f "$target"
+        reload
+        echo "Default colors restored"
+        ;;
+    current)
+        current_theme
+        ;;
+    -h|--help|help)
+        usage
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

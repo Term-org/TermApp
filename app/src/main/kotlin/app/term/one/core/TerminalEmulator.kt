@@ -89,6 +89,9 @@ class TerminalEmulator(
     private var curFg = Colors.DEFAULT
     private var curBg = Colors.DEFAULT
     private var curAttr = 0
+    private var curLink = 0
+    private val links = ArrayList<String>()
+    private val linkIds = HashMap<String, Int>()
 
     private var autoWrap = true
     private var originMode = false
@@ -176,6 +179,182 @@ class TerminalEmulator(
                 }
             }
             return sb.toString()
+        }
+    }
+
+    class SearchMatch(val line: Long, val col: Int, val length: Int)
+
+    // Returns the link under a cell: an OSC 8 hyperlink, or a plain URL found in the text.
+    // The index is relative to the screen (negative values address the scrollback).
+    fun urlAt(index: Int, col: Int): String? {
+        synchronized(lock) {
+            if (index < -screen.scrollback.size || index >= rows) {
+                return null
+            }
+            val row = getLine(index)
+            if (col < 0 || col >= row.cols) {
+                return null
+            }
+            val id = row.link[col]
+            if (id in 1..links.size) {
+                return links[id - 1]
+            }
+            return plainUrlAt(index, col)
+        }
+    }
+
+    private fun plainUrlAt(index: Int, col: Int): String? {
+        var first = index
+        var steps = 0
+        while (first > -screen.scrollback.size && getLine(first - 1).wrapped && steps < MAX_LOGICAL_ROWS) {
+            first--
+            steps++
+        }
+        var last = index
+        steps = 0
+        while (last < rows - 1 && getLine(last).wrapped && steps < MAX_LOGICAL_ROWS) {
+            last++
+            steps++
+        }
+
+        val text = StringBuilder()
+        val cellOf = ArrayList<Int>()
+        for (r in first..last) {
+            val row = getLine(r)
+            for (c in 0 until row.cols) {
+                if ((row.attr[c] and Attr.WIDE_CONT) != 0) {
+                    continue
+                }
+                val before = text.length
+                text.appendCodePoint(row.cp[c])
+                val offset = (r - first) * cols + c
+                for (k in before until text.length) {
+                    cellOf.add(offset)
+                }
+            }
+        }
+
+        var cell = col
+        if (col > 0 && (getLine(index).attr[col] and Attr.WIDE_CONT) != 0) {
+            cell = col - 1
+        }
+        val at = cellOf.indexOf((index - first) * cols + cell)
+        if (at < 0) {
+            return null
+        }
+
+        for (m in URL_REGEX.findAll(text)) {
+            if (at < m.range.first || at > m.range.last) {
+                continue
+            }
+            val url = trimUrl(m.value)
+            if (at >= m.range.first + url.length) {
+                return null
+            }
+            return if (url.length in 8..MAX_LINK_LENGTH) url else null
+        }
+        return null
+    }
+
+    private fun trimUrl(raw: String): String {
+        var url = raw
+        while (url.isNotEmpty()) {
+            val last = url.last()
+            if (TRAILING.indexOf(last) >= 0) {
+                url = url.dropLast(1)
+            } else if (last == ')' && url.count { it == '(' } < url.count { it == ')' }) {
+                url = url.dropLast(1)
+            } else {
+                break
+            }
+        }
+        return url
+    }
+
+    private fun setHyperlink(data: ByteArray, start: Int, end: Int) {
+        var sep = -1
+        for (k in start until end) {
+            if (data[k].toInt() == ';'.code) {
+                sep = k
+                break
+            }
+        }
+        val length = if (sep < 0) 0 else end - sep - 1
+        if (length <= 0 || length > MAX_LINK_LENGTH) {
+            curLink = 0
+            return
+        }
+        curLink = registerLink(String(data, sep + 1, length, Charsets.UTF_8))
+    }
+
+    private fun registerLink(uri: String): Int {
+        if (!isSafeLink(uri)) {
+            return 0
+        }
+        linkIds[uri]?.let { return it }
+        if (links.size >= MAX_LINKS) {
+            return 0
+        }
+        links.add(uri)
+        linkIds[uri] = links.size
+        return links.size
+    }
+
+    private fun isSafeLink(uri: String): Boolean {
+        if (uri.isEmpty() || uri.length > MAX_LINK_LENGTH) {
+            return false
+        }
+        for (ch in uri) {
+            if (ch.code < 0x20 || ch.code == 0x7F) {
+                return false
+            }
+        }
+        val lower = uri.lowercase()
+        return lower.startsWith("http://") || lower.startsWith("https://") ||
+            lower.startsWith("mailto:") || lower.startsWith("tel:") || lower.startsWith("geo:")
+    }
+
+    // Finds the text in the scrollback and on the screen. Matches do not span wrapped lines.
+    fun search(query: String): List<SearchMatch> {
+        if (query.isEmpty()) {
+            return emptyList()
+        }
+        synchronized(lock) {
+            val found = ArrayList<SearchMatch>()
+            val base = screen.lineBase
+            for (index in -screen.scrollback.size until rows) {
+                val row = getLine(index)
+                val text = StringBuilder(row.cols)
+                val cellOf = IntArray(row.cols * 2)
+                var n = 0
+                for (c in 0 until row.cols) {
+                    if ((row.attr[c] and Attr.WIDE_CONT) != 0) {
+                        continue
+                    }
+                    val before = text.length
+                    text.appendCodePoint(row.cp[c])
+                    for (k in before until text.length) {
+                        cellOf[n++] = c
+                    }
+                }
+                val line = text.toString()
+                var i = 0
+                while (i <= line.length - query.length) {
+                    if (line.regionMatches(i, query, 0, query.length, ignoreCase = true)) {
+                        val start = cellOf[i]
+                        val endCell = cellOf[i + query.length - 1]
+                        val width = if ((row.attr[endCell] and Attr.WIDE) != 0) 2 else 1
+                        found.add(SearchMatch(base + index, start, endCell + width - start))
+                        if (found.size >= MAX_MATCHES) {
+                            return found
+                        }
+                        i += query.length
+                    } else {
+                        i++
+                    }
+                }
+            }
+            return found
         }
     }
 
@@ -524,15 +703,18 @@ class TerminalEmulator(
         if (width == 2) {
             breakWide(row, cursorCol + 1)
         }
+        val linkAttr = if (curLink != 0) Attr.UNDERLINE else 0
         row.cp[cursorCol] = cp
         row.fg[cursorCol] = curFg
         row.bg[cursorCol] = curBg
-        row.attr[cursorCol] = curAttr or (if (width == 2) Attr.WIDE else 0)
+        row.attr[cursorCol] = curAttr or linkAttr or (if (width == 2) Attr.WIDE else 0)
+        row.link[cursorCol] = curLink
         if (width == 2) {
             row.cp[cursorCol + 1] = TerminalRow.SPACE
             row.fg[cursorCol + 1] = curFg
             row.bg[cursorCol + 1] = curBg
-            row.attr[cursorCol + 1] = curAttr or Attr.WIDE_CONT
+            row.attr[cursorCol + 1] = curAttr or linkAttr or Attr.WIDE_CONT
+            row.link[cursorCol + 1] = curLink
         }
         if (screen.images.isNotEmpty()) {
             removeImagesInRect(cursorRow, cursorRow, cursorCol, cursorCol + width - 1)
@@ -1125,6 +1307,7 @@ class TerminalEmulator(
                     reply("\u001b]$code;${oscColor(color)}\u001b\\")
                 }
             }
+            8 -> setHyperlink(data, payload, n)
             52 -> clipboardFromOsc(data, payload, n)
             1337 -> {
                 if (startsWith(data, payload, n, "File=")) {
@@ -1332,6 +1515,7 @@ class TerminalEmulator(
         reverseVideo = false
         sixelDisplayMode = false
         cursorStyle = 1
+        curLink = 0
         cursorRow = 0
         cursorCol = 0
         saved = null
@@ -1347,6 +1531,12 @@ class TerminalEmulator(
         const val MAX_PARAMS = 32
         const val MAX_STRING = 16 * 1024 * 1024
         const val MAX_IMAGES = 64
+        const val MAX_LINKS = 4096
+        const val MAX_LINK_LENGTH = 2048
+        const val MAX_LOGICAL_ROWS = 50
+        const val MAX_MATCHES = 5000
+        const val TRAILING = ".,;:!?'\"]}>"
+        val URL_REGEX = Regex("https?://[^\\s<>\"'`]+")
 
         const val STATE_GROUND = 0
         const val STATE_ESC = 1

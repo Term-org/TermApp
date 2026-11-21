@@ -40,6 +40,10 @@ object TermEnvironment {
         env["COLORTERM"] = "truecolor"
         env["LANG"] = "en_US.UTF-8"
         env["TERM_APP_ID"] = paths.appId
+        env["RISH_APPLICATION_ID"] = paths.appId
+        if (!paths.termFont.isFile) {
+            env["TN_ASCII"] = "1"
+        }
         env["TERMONE_VERSION"] = BuildConfig.VERSION_NAME
 
         env["TERMUX_APP__PACKAGE_NAME"] = paths.appId

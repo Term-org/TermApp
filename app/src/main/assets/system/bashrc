@@ -1,6 +1,6 @@
 # System shell configuration of the Term apps.
 # This file is rewritten by the app on every start, so do not edit it.
-# Put your own settings in ~/.bashrc and ~/.bash_profile; both are loaded at the end.
+# Put your own settings in ~/.bash_profile and ~/.bashrc; both are loaded at the end.
 
 case $- in
     *i*) ;;
@@ -17,17 +17,58 @@ if [ -d "$PREFIX/etc/profile.d" ]; then
     unset script
 fi
 
-shopt -s checkwinsize histappend
+shopt -s checkwinsize histappend cmdhist
 HISTSIZE=5000
 HISTFILESIZE=10000
 HISTCONTROL=ignoredups:erasedups
 
+# Prompt: "~$" in the home folder, the name of the folder anywhere else.
 PS1='\[\e[1;34m\]\W\[\e[0m\]\$ '
 
-alias ls='ls --color=auto'
+# Colors. Set NO_COLOR=1 to turn them off.
+if [ -z "${NO_COLOR:-}" ]; then
+    if command -v dircolors >/dev/null 2>&1; then
+        if [ -r "$HOME/.dir_colors" ]; then
+            eval "$(dircolors -b "$HOME/.dir_colors")"
+        else
+            eval "$(dircolors -b)"
+        fi
+    fi
+    alias ls='ls --color=auto'
+    alias grep='grep --color=auto'
+    alias egrep='grep -E --color=auto'
+    alias fgrep='grep -F --color=auto'
+    alias diff='diff --color=auto'
+    export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01'
+    export LESS_TERMCAP_mb=$'\e[1;31m'
+    export LESS_TERMCAP_md=$'\e[1;36m'
+    export LESS_TERMCAP_me=$'\e[0m'
+    export LESS_TERMCAP_so=$'\e[01;44;33m'
+    export LESS_TERMCAP_se=$'\e[0m'
+    export LESS_TERMCAP_us=$'\e[1;32m'
+    export LESS_TERMCAP_ue=$'\e[0m'
+    if [ -z "${LESS:-}" ]; then
+        export LESS='-R'
+    fi
+fi
+
 alias ll='ls -lAh'
-alias grep='grep --color=auto'
 alias ..='cd ..'
+
+# Programmable completion.
+bind 'set completion-ignore-case on'
+bind 'set show-all-if-ambiguous on'
+bind 'set colored-stats on'
+bind 'set colored-completion-prefix on'
+bind 'set mark-symlinked-directories on'
+if ! shopt -oq posix; then
+    if [ -r "$PREFIX/share/bash-completion/bash_completion" ]; then
+        . "$PREFIX/share/bash-completion/bash_completion"
+    fi
+    if [ -r "$TERM_SYSTEM_DIR/completion.bash" ]; then
+        . "$TERM_SYSTEM_DIR/completion.bash"
+    fi
+fi
 
 # User configuration.
 if [ -r "$HOME/.bash_profile" ]; then

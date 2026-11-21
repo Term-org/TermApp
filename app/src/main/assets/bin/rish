@@ -1,0 +1,22 @@
+# rish - run commands with the privileges of Shizuku (adb shell or root)
+#
+# Usage: rish [-c COMMAND] [arguments]   (the same arguments as a shell)
+
+BASEDIR="$(dirname "$0")"
+DEX="$BASEDIR/rish_shizuku.dex"
+
+if [ ! -f "$DEX" ]; then
+    echo "rish: cannot find $DEX" >&2
+    exit 1
+fi
+
+if [ -z "${RISH_APPLICATION_ID:-}" ]; then
+    RISH_APPLICATION_ID="${TERM_APP_ID:-}"
+fi
+if [ -z "$RISH_APPLICATION_ID" ]; then
+    echo "rish: RISH_APPLICATION_ID is not set" >&2
+    exit 1
+fi
+export RISH_APPLICATION_ID
+
+exec /system/bin/app_process -Djava.class.path="$DEX" /system/bin --nice-name=rish rikka.shizuku.shell.ShizukuShellLoader "$@"

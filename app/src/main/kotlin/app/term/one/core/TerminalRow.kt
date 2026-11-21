@@ -9,6 +9,7 @@ class TerminalRow(val cols: Int) {
     val fg = IntArray(cols) { Colors.DEFAULT }
     val bg = IntArray(cols) { Colors.DEFAULT }
     val attr = IntArray(cols)
+    val link = IntArray(cols)
     var wrapped = false
 
     fun clear(from: Int, to: Int, background: Int) {
@@ -19,6 +20,7 @@ class TerminalRow(val cols: Int) {
             fg[i] = Colors.DEFAULT
             bg[i] = background
             attr[i] = 0
+            link[i] = 0
         }
     }
 
@@ -27,6 +29,7 @@ class TerminalRow(val cols: Int) {
         fg[to] = fg[from]
         bg[to] = bg[from]
         attr[to] = attr[from]
+        link[to] = link[from]
     }
 
     fun resized(newCols: Int): TerminalRow {
@@ -36,6 +39,7 @@ class TerminalRow(val cols: Int) {
         System.arraycopy(fg, 0, row.fg, 0, n)
         System.arraycopy(bg, 0, row.bg, 0, n)
         System.arraycopy(attr, 0, row.attr, 0, n)
+        System.arraycopy(link, 0, row.link, 0, n)
         row.wrapped = wrapped
         return row
     }

@@ -1,19 +1,74 @@
 # tn - Term package manager (frontend for apt and dpkg)
 #
-# Usage: tn <command> [arguments]
-# Run "tn help" for the full list.
+# Usage:
+#   tn                        open the interface
+#   tn <packages>:<action>    run an action, see "tn help"
 
 set -u
 
 : "${PREFIX:?tn: PREFIX is not set}"
 
-TN_VERSION="1.1.0"
+TN_VERSION="2.0.0"
 APT_DIR="$PREFIX/etc/apt"
 LIST_DIR="$APT_DIR/sources.list.d"
-COMMUNITY_BASE="${TN_COMMUNITY_URL:-https://term-org.github.io/TCP}"
+KEY_DIR="$APT_DIR/keyrings"
+FROZEN_DIR="$PREFIX/var/lib/tn/frozen"
+TCP_BASE="${TN_TCP_URL:-https://term-org.github.io/TCP}"
+ASSUME_YES=0
+ALLOW_RESERVED=0
+ESC=$'\033'
+FS_CHAR=$'\037'
+PROTECTED=" bash dash coreutils apt dpkg findutils grep sed gawk curl tar gzip util-linux openssl ca-certificates termux-core termux-exec termux-tools libc++ "
+
+if [ "${TN_ASCII:-0}" = "1" ]; then
+    I_OK="+"
+    I_ERR="x"
+    I_WARN="!"
+    I_INST="*"
+    I_AVAIL="-"
+    I_UPG="^"
+    I_FROZEN="#"
+    I_PKG=">"
+    I_INFO="i"
+    I_SRC="@"
+    I_DOC="?"
+    I_VER="v"
+    SEP="|"
+else
+    I_OK=$'\xEF\x80\x8C'
+    I_ERR=$'\xEF\x80\x8D'
+    I_WARN=$'\xEF\x81\xB1'
+    I_INST=$'\xEF\x81\x98'
+    I_AVAIL=$'\xEF\x84\x8C'
+    I_UPG=$'\xEF\x82\xAA'
+    I_FROZEN=$'\xEF\x8B\x9C'
+    I_PKG=$'\xEF\x86\xB2'
+    I_INFO=$'\xEF\x81\x9A'
+    I_SRC=$'\xEF\x87\x80'
+    I_DOC=$'\xEF\x80\xAD'
+    I_VER=$'\xEF\x80\xAB'
+    SEP=$'\xE2\x94\x82'
+fi
+
+TAB_NAME=(Details Source Readme Versions)
+TAB_ICON=("$I_INFO" "$I_SRC" "$I_DOC" "$I_VER")
+
+# ------------------------------------------------------------------ output
+
+err() {
+    printf '%s %s\n' "$I_ERR" "$*" >&2
+}
+
+warn() {
+    printf '%s %s\n' "$I_WARN" "$*" >&2
+}
+
+ok() {
+    printf '%s %s\n' "$I_OK" "$*"
+}
 
 die() {
-    echo "tn: $*" >&2
+    err "$*"
     exit 1
 }
 
@@ -21,225 +76,1182 @@ need() {
     command -v "$1" >/dev/null 2>&1 || die "$1 was not found. Run: tn doctor"
 }
 
+# Removes control characters (including ESC) from text that comes from repositories.
+sanitize() {
+    tr -d '\000-\010\013-\037\177'
+}
+
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
+
+confirm() {
+    if [ "$ASSUME_YES" -eq 1 ]; then
+        return 0
+    fi
+    if [ ! -t 0 ]; then
+        err "a confirmation is needed; run the command again with -y"
+        return 1
+    fi
+    local answer=""
+    printf '%s [y/N] ' "$1"
+    read -r answer || true
+    case "$answer" in
+        y|Y|yes|YES) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+valid_pkg() {
+    [[ "$1" =~ ^[a-z0-9][a-z0-9+.-]*$ ]]
+}
+
+valid_label() {
+    [[ "$1" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
+}
+
 usage() {
     cat <<'EOF'
 tn - Term package manager
 
-Packages:
-  tn update                    Refresh the package lists
-  tn upgrade                   Update the lists, then upgrade installed packages
-  tn install PKG...            Install packages
-  tn remove PKG...             Remove packages
-  tn purge PKG...              Remove packages together with their configuration
-  tn autoremove                Remove packages that are no longer needed
-  tn search TERM               Search for packages
-  tn show PKG                  Show package details
-  tn list [apt list options]   List packages
-  tn files PKG                 List the files installed by a package
-  tn owns FILE                 Find the package that owns a file
-  tn clean                     Delete downloaded package files
+  tn                               Open the interface
+
+Packages (separate several names with ; or , and quote the ;):
+  tn <package>:install             Install a package
+  tn "<a>;<b>:install"             Install several packages
+  tn <package>:remove              Uninstall a package
+  tn <package>:purge               Uninstall and delete its configuration
+  tn <package>:details             Show details
+  tn <package>:upgrade             Upgrade a package
+  tn <package>:freeze              Freeze a package (its programs stop working)
+  tn <package>:unfreeze            Unfreeze it again
+  tn <package>:files               List the files of a package
+  tn <text>:search                 Search packages
+
+All packages (gp = global packages):
+  tn gp:update                     Refresh the package lists
+  tn gp:upgrade                    Refresh the lists and upgrade everything
+  tn gp:list                       List installed packages
+  tn gp:clean                      Delete downloaded package files
+  tn gp:autoremove                 Remove packages that are no longer needed
 
 Repositories:
-  tn repo list
-  tn repo add NAME URL [SUITE [COMPONENT]] [--keyring FILE]
-  tn repo remove NAME
-  tn repo enable NAME
-  tn repo disable NAME
-
-Community packages (Term Community Packages):
-  tn community enable [-y]     Enable the community repository
-  tn community disable         Disable it again
-  tn community status          Show whether it is enabled
+  tn -c add <link> -l <label>      Add a repository (also: tn community add ... -label ...)
+        [-k <key url or file>] [-s <suite>] [-m <component>] [-y]
+  tn -c list                       List the repositories
+  tn -c remove <label>             Remove a repository
+  tn <label>:activate              Turn a repository on
+  tn <label>:non-active            Turn a repository off
+  tn tcp:activate                  Add and turn on the community repository
 
 Other:
-  tn doctor                    Check the environment
-  tn version                   Show the version
-  tn help                      Show this help
+  tn doctor                        Check the environment
+  tn version                       Show the version
+  tn -y ...                        Do not ask for confirmation
 EOF
 }
 
-repo_cmd() {
-    local action="${1:-list}"
-    if [ $# -gt 0 ]; then
-        shift
+legacy_hint() {
+    err "that command style was replaced"
+    cat >&2 <<'EOF'
+   tn <package>:install      tn "<a>;<b>:install"      tn <package>:remove
+   tn <package>:details      tn <package>:upgrade      tn gp:upgrade
+   tn -c add <link> -l <label>
+Run "tn help" for everything.
+EOF
+}
+
+# ------------------------------------------------------------------ package state
+
+installed_version() {
+    local out st ver
+    out="$(dpkg-query -W -f='${db:Status-Abbrev}\t${Version}' "$1" 2>/dev/null)" || return 0
+    st="${out%%$'\t'*}"
+    ver="${out#*$'\t'}"
+    case "$st" in
+        ii*) printf '%s' "$ver" ;;
+    esac
+}
+
+is_installed() {
+    [ -n "$(installed_version "$1")" ]
+}
+
+is_frozen() {
+    [ -e "$FROZEN_DIR/$1" ]
+}
+
+is_protected() {
+    local pkg="$1" essential
+    case "$PROTECTED" in
+        *" $pkg "*) return 0 ;;
+    esac
+    essential="$(dpkg-query -W -f='${Essential}' "$pkg" 2>/dev/null)"
+    [ "$essential" = "yes" ]
+}
+
+record_field() {
+    printf '%s\n' "$1" | sed -n "s/^$2: //p" | head -n 1
+}
+
+first_record() {
+    apt-cache show "$1" 2>/dev/null | awk 'BEGIN { RS = ""; FS = "\n" } NR == 1 { print; exit }'
+}
+
+label_for_url() {
+    local url="$1" file label
+    for file in "$APT_DIR/sources.list" "$LIST_DIR"/*.list "$LIST_DIR"/*.list.disabled; do
+        [ -f "$file" ] || continue
+        if grep -Fq -- "$url" "$file" 2>/dev/null; then
+            case "$file" in
+                */sources.list)
+                    printf 'tp'
+                    ;;
+                *)
+                    label="$(basename "$file")"
+                    label="${label%.disabled}"
+                    printf '%s' "${label%.list}"
+                    ;;
+            esac
+            return 0
+        fi
+    done
+    printf 'unknown'
+}
+
+# ------------------------------------------------------------------ text for details, source, readme and versions
+
+details_text() {
+    local pkg="$1" record installed candidate status size section maintainer homepage depends desc
+    record="$(first_record "$pkg")"
+    installed="$(installed_version "$pkg")"
+
+    if [ -z "$record" ]; then
+        if [ -n "$installed" ]; then
+            printf '%-12s %s\n' "Name:" "$pkg"
+            printf '%-12s %s\n' "Status:" "installed ($installed), not available in any repository"
+            return 0
+        fi
+        printf 'No information about %s.\n' "$pkg"
+        printf 'Refresh the package lists with: tn gp:update\n'
+        return 1
     fi
 
-    case "$action" in
+    candidate="$(record_field "$record" Version)"
+    status="not installed"
+    if [ -n "$installed" ]; then
+        status="installed"
+        if [ "$installed" != "$candidate" ]; then
+            status="installed, update available ($candidate)"
+        fi
+    fi
+    if is_frozen "$pkg"; then
+        status="$status, frozen"
+    fi
+
+    size="$(record_field "$record" Installed-Size)"
+    section="$(record_field "$record" Section)"
+    maintainer="$(record_field "$record" Maintainer)"
+    homepage="$(record_field "$record" Homepage)"
+    depends="$(record_field "$record" Depends)"
+    desc="$(printf '%s\n' "$record" | awk '/^Description: / { p = 1; print substr($0, 14); next } p && /^ / { l = substr($0, 2); if (l == ".") l = ""; print l; next } { p = 0 }')"
+
+    printf '%-12s %s\n' "Name:" "$pkg"
+    printf '%-12s %s\n' "Status:" "$status"
+    printf '%-12s %s\n' "Version:" "$candidate"
+    if [ -n "$installed" ]; then
+        printf '%-12s %s\n' "Installed:" "$installed"
+    fi
+    if [ -n "$size" ]; then
+        printf '%-12s %s\n' "Size:" "$size KiB installed"
+    fi
+    if [ -n "$section" ]; then
+        printf '%-12s %s\n' "Section:" "$section"
+    fi
+    if [ -n "$maintainer" ]; then
+        printf '%-12s %s\n' "Maintainer:" "$maintainer"
+    fi
+    if [ -n "$homepage" ]; then
+        printf '%-12s %s\n' "Homepage:" "$homepage"
+    fi
+    if [ -n "$depends" ]; then
+        printf '%-12s %s\n' "Depends:" "$depends"
+    fi
+    printf '\n%s\n' "$desc"
+}
+
+source_text() {
+    local pkg="$1" policy line url label
+    policy="$(apt-cache policy "$pkg" 2>/dev/null)"
+    if [ -z "$policy" ] || ! grep -q 'Candidate:' <<<"$policy"; then
+        printf 'Unknown package: %s\n' "$pkg"
+        return 1
+    fi
+    while IFS= read -r line; do
+        if [[ "$line" =~ (https?://[^[:space:]]+) ]]; then
+            url="${BASH_REMATCH[1]}"
+            label="$(label_for_url "$url")"
+            printf '%s  [%s]\n' "$line" "$label"
+        else
+            printf '%s\n' "$line"
+        fi
+    done <<<"$policy"
+}
+
+readme_text() {
+    local pkg="$1" dir file found="" homepage
+    dir="$PREFIX/share/doc/$pkg"
+    if [ -d "$dir" ]; then
+        for file in "$dir"/README* "$dir"/readme* "$dir"/Readme*; do
+            if [ -f "$file" ]; then
+                found="$file"
+                break
+            fi
+        done
+    fi
+    if [ -z "$found" ] && is_installed "$pkg"; then
+        file="$(dpkg -L "$pkg" 2>/dev/null | grep -i '/readme[^/]*$' | head -n 1)"
+        if [ -n "$file" ] && [ -f "$file" ]; then
+            found="$file"
+        fi
+    fi
+    if [ -n "$found" ]; then
+        printf '%s\n\n' "${found#"$PREFIX"/}"
+        case "$found" in
+            *.gz) gzip -dc "$found" 2>/dev/null | head -c 60000 ;;
+            *) head -c 60000 "$found" ;;
+        esac
+        return 0
+    fi
+    if is_installed "$pkg"; then
+        echo "This package does not ship a README."
+    else
+        echo "Install the package to read its README."
+    fi
+    homepage="$(record_field "$(first_record "$pkg")" Homepage)"
+    if [ -n "$homepage" ]; then
+        printf '\nHomepage: %s\n' "$homepage"
+    fi
+}
+
+versions_text() {
+    local pkg="$1" installed madison line version source url label mark found=0
+    installed="$(installed_version "$pkg")"
+    madison="$(apt-cache madison "$pkg" 2>/dev/null)"
+    if [ -z "$madison" ] && [ -z "$installed" ]; then
+        printf 'No version information for %s.\n' "$pkg"
+        return 0
+    fi
+    printf '* = installed\n\n'
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        IFS='|' read -r _ version source <<<"$line"
+        version="$(trim "$version")"
+        source="$(trim "$source")"
+        url="${source%% *}"
+        label="$(label_for_url "$url")"
+        mark=" "
+        if [ "$version" = "$installed" ]; then
+            mark="*"
+            found=1
+        fi
+        printf '%s %s  [%s]\n' "$mark" "$version" "$label"
+    done <<<"$madison"
+    if [ -n "$installed" ] && [ "$found" -eq 0 ]; then
+        printf '* %s  [installed, not in any repository]\n' "$installed"
+    fi
+}
+
+# ------------------------------------------------------------------ freeze
+
+freeze_pkg() {
+    local pkg="$1" state="$FROZEN_DIR/$1" path mode tmp
+    if ! is_installed "$pkg"; then
+        err "$pkg is not installed"
+        return 1
+    fi
+    if is_frozen "$pkg"; then
+        err "$pkg is already frozen"
+        return 1
+    fi
+    if is_protected "$pkg"; then
+        err "$pkg is needed by the system and cannot be frozen"
+        return 1
+    fi
+
+    mkdir -p "$FROZEN_DIR" || return 1
+    tmp="$state.tmp"
+    : > "$tmp"
+    while IFS= read -r path; do
+        if [ ! -f "$path" ] || [ -L "$path" ] || [ ! -x "$path" ]; then
+            continue
+        fi
+        case "$path" in
+            *.so|*.so.*) continue ;;
+        esac
+        mode="$(stat -c '%a' "$path" 2>/dev/null)" || continue
+        printf '%s\t%s\n' "$mode" "$path" >> "$tmp"
+        chmod a-x "$path"
+    done < <(dpkg -L "$pkg" 2>/dev/null)
+
+    if [ ! -s "$tmp" ]; then
+        rm -f "$tmp"
+        err "$pkg has no programs to freeze"
+        return 1
+    fi
+    mv "$tmp" "$state"
+    apt-mark hold "$pkg" >/dev/null 2>&1 || true
+    ok "$pkg is frozen"
+}
+
+unfreeze_pkg() {
+    local pkg="$1" state="$FROZEN_DIR/$1" mode path
+    if ! is_frozen "$pkg"; then
+        err "$pkg is not frozen"
+        return 1
+    fi
+    while IFS=$'\t' read -r mode path; do
+        if [ -f "$path" ]; then
+            chmod "$mode" "$path"
+        fi
+    done < "$state"
+    rm -f "$state"
+    apt-mark unhold "$pkg" >/dev/null 2>&1 || true
+    ok "$pkg is unfrozen"
+}
+
+# ------------------------------------------------------------------ package actions
+
+pkg_install() {
+    need apt
+    if ! apt install "$@"; then
+        err "the installation failed; if a package was not found, refresh the lists with: tn gp:update"
+        return 1
+    fi
+}
+
+pkg_remove() {
+    need apt
+    local pkg
+    for pkg in "$@"; do
+        if is_frozen "$pkg"; then
+            die "$pkg is frozen; run tn $pkg:unfreeze first"
+        fi
+    done
+    apt remove "$@"
+}
+
+pkg_purge() {
+    need apt
+    local pkg
+    for pkg in "$@"; do
+        if is_frozen "$pkg"; then
+            die "$pkg is frozen; run tn $pkg:unfreeze first"
+        fi
+    done
+    apt purge "$@"
+}
+
+pkg_upgrade() {
+    need apt
+    local pkg
+    for pkg in "$@"; do
+        if ! is_installed "$pkg"; then
+            die "$pkg is not installed (install it with: tn $pkg:install)"
+        fi
+        if is_frozen "$pkg"; then
+            die "$pkg is frozen; run tn $pkg:unfreeze first"
+        fi
+    done
+    apt install --only-upgrade "$@"
+}
+
+pkg_details() {
+    need apt-cache
+    local pkg first=1
+    for pkg in "$@"; do
+        if [ "$first" -eq 0 ]; then
+            printf '\n'
+        fi
+        first=0
+        details_text "$pkg" | sanitize
+    done
+}
+
+global_cmd() {
+    need apt
+    case "$1" in
+        update)
+            apt update
+            ;;
+        upgrade)
+            apt update || die "unable to refresh the package lists"
+            apt upgrade
+            ;;
         list)
-            if [ -f "$APT_DIR/sources.list" ]; then
-                echo "[main] sources.list"
-                grep -v '^[[:space:]]*#' "$APT_DIR/sources.list" | grep -v '^[[:space:]]*$' | sed 's/^/    /'
-            fi
-            local file name state
-            for file in "$LIST_DIR"/*.list "$LIST_DIR"/*.list.disabled; do
-                [ -f "$file" ] || continue
-                name="$(basename "$file")"
-                state="enabled"
-                case "$name" in
-                    *.list.disabled)
-                        state="disabled"
-                        name="${name%.list.disabled}"
-                        ;;
-                    *)
-                        name="${name%.list}"
-                        ;;
-                esac
-                echo "[$name] ($state)"
-                grep -v '^[[:space:]]*#' "$file" | grep -v '^[[:space:]]*$' | sed 's/^/    /'
-            done
+            apt list --installed
             ;;
-        add)
-            local name="${1:-}" url="${2:-}" suite="stable" component="main" keyring=""
-            if [ -z "$name" ] || [ -z "$url" ]; then
-                die "usage: tn repo add NAME URL [SUITE [COMPONENT]] [--keyring FILE]"
-            fi
-            shift 2
-            local positional=()
-            while [ $# -gt 0 ]; do
-                case "$1" in
-                    --keyring)
-                        keyring="${2:-}"
-                        [ -n "$keyring" ] || die "--keyring needs a file"
-                        shift 2
-                        ;;
-                    *)
-                        positional+=("$1")
-                        shift
-                        ;;
-                esac
-            done
-            if [ "${#positional[@]}" -ge 1 ]; then
-                suite="${positional[0]}"
-            fi
-            if [ "${#positional[@]}" -ge 2 ]; then
-                component="${positional[1]}"
-            fi
-
-            case "$name" in
-                [a-z0-9]*) ;;
-                *) die "repository name must start with a lowercase letter or digit" ;;
-            esac
-            case "$name" in
-                *[!a-z0-9_-]*) die "repository name may only contain a-z, 0-9, _ and -" ;;
-            esac
-            case "$url" in
-                https://*) ;;
-                *) die "repository URL must start with https://" ;;
-            esac
-            if [ -e "$LIST_DIR/$name.list" ] || [ -e "$LIST_DIR/$name.list.disabled" ]; then
-                die "repository '$name' already exists"
-            fi
-
-            mkdir -p "$LIST_DIR"
-            local options=""
-            if [ -n "$keyring" ]; then
-                [ -f "$keyring" ] || die "keyring file not found: $keyring"
-                mkdir -p "$APT_DIR/keyrings"
-                cp "$keyring" "$APT_DIR/keyrings/$name.gpg"
-                options="[signed-by=$APT_DIR/keyrings/$name.gpg] "
-            fi
-            printf 'deb %s%s %s %s\n' "$options" "$url" "$suite" "$component" > "$LIST_DIR/$name.list"
-            echo "Added repository '$name'. Run: tn update"
+        clean)
+            apt clean
             ;;
-        remove)
-            local name="${1:-}"
-            [ -n "$name" ] || die "usage: tn repo remove NAME"
-            if [ ! -e "$LIST_DIR/$name.list" ] && [ ! -e "$LIST_DIR/$name.list.disabled" ]; then
-                die "repository '$name' does not exist"
-            fi
-            rm -f "$LIST_DIR/$name.list" "$LIST_DIR/$name.list.disabled" "$APT_DIR/keyrings/$name.gpg"
-            echo "Removed repository '$name'"
-            ;;
-        enable)
-            local name="${1:-}"
-            [ -n "$name" ] || die "usage: tn repo enable NAME"
-            [ -f "$LIST_DIR/$name.list.disabled" ] || die "no disabled repository named '$name'"
-            mv "$LIST_DIR/$name.list.disabled" "$LIST_DIR/$name.list"
-            echo "Enabled repository '$name'. Run: tn update"
-            ;;
-        disable)
-            local name="${1:-}"
-            [ -n "$name" ] || die "usage: tn repo disable NAME"
-            [ -f "$LIST_DIR/$name.list" ] || die "no enabled repository named '$name'"
-            mv "$LIST_DIR/$name.list" "$LIST_DIR/$name.list.disabled"
-            echo "Disabled repository '$name'. Run: tn update"
+        autoremove)
+            apt autoremove
             ;;
         *)
-            die "unknown repo command: $action"
+            die "unknown action for gp: $1 (update, upgrade, list, clean, autoremove)"
             ;;
     esac
+}
+
+# ------------------------------------------------------------------ repositories
+
+url_ok() {
+    curl -fsL --max-time 25 -o /dev/null "$1" 2>/dev/null
+}
+
+list_url() {
+    awk '$1 == "deb" { for (i = 2; i <= NF; i++) if ($i ~ /^https?:\/\//) { print $i; exit } }' "$1" 2>/dev/null
+}
+
+repo_list() {
+    local file name state url
+    if [ -f "$APT_DIR/sources.list" ]; then
+        url="$(list_url "$APT_DIR/sources.list")"
+        printf '  %-12s %-10s %s\n' "tp" "active" "${url:-(none)}"
+    fi
+    for file in "$LIST_DIR"/*.list "$LIST_DIR"/*.list.disabled; do
+        [ -f "$file" ] || continue
+        name="$(basename "$file")"
+        case "$name" in
+            *.list.disabled)
+                state="inactive"
+                name="${name%.list.disabled}"
+                ;;
+            *)
+                state="active"
+                name="${name%.list}"
+                ;;
+        esac
+        printf '  %-12s %-10s %s\n' "$name" "$state" "$(list_url "$file")"
+    done
+    if [ ! -f "$LIST_DIR/tcp.list" ] && [ ! -f "$LIST_DIR/tcp.list.disabled" ]; then
+        printf '  %-12s %-10s %s\n' "tcp" "not added" "(tn tcp:activate)"
+    fi
+}
+
+repo_add() {
+    local url="" label="" suite="stable" component="main" key="" base signed=0 options="" tmp ext
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -l|-label|--label)
+                label="${2:-}"
+                [ -n "$label" ] || die "$1 needs a label"
+                shift 2
+                ;;
+            -s|--suite)
+                suite="${2:-}"
+                [ -n "$suite" ] || die "$1 needs a suite"
+                shift 2
+                ;;
+            -m|--component)
+                component="${2:-}"
+                [ -n "$component" ] || die "$1 needs a component"
+                shift 2
+                ;;
+            -k|--key)
+                key="${2:-}"
+                [ -n "$key" ] || die "$1 needs a key (a link or a file)"
+                shift 2
+                ;;
+            -y|--yes)
+                ASSUME_YES=1
+                shift
+                ;;
+            -*)
+                die "unknown option: $1"
+                ;;
+            *)
+                [ -z "$url" ] || die "unexpected argument: $1"
+                url="$1"
+                shift
+                ;;
+        esac
+    done
+
+    [ -n "$url" ] || die "usage: tn -c add <link> -l <label>"
+    [ -n "$label" ] || die "the repository needs a label: -l <label>"
+    case "$url" in
+        https://*) ;;
+        *) die "the link must start with https://" ;;
+    esac
+    url="${url%/}"
+    valid_label "$label" || die "invalid label (use a-z, 0-9, _ and -)"
+    if [ "$ALLOW_RESERVED" -ne 1 ]; then
+        case "$label" in
+            tp|tcp|gp) die "the label '$label' is reserved" ;;
+        esac
+    fi
+    if [ -e "$LIST_DIR/$label.list" ] || [ -e "$LIST_DIR/$label.list.disabled" ]; then
+        die "a repository with the label '$label' already exists"
+    fi
+    [[ "$suite" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid suite"
+    [[ "$component" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid component"
+
+    need curl
+    base="$url/dists/$suite"
+    if ! url_ok "$base/InRelease" && ! url_ok "$base/Release"; then
+        die "no apt repository was found at $url (suite $suite)"
+    fi
+    if url_ok "$base/InRelease" || url_ok "$base/Release.gpg"; then
+        signed=1
+    fi
+
+    if [ -n "$key" ]; then
+        tmp="$(mktemp)" || die "unable to create a temporary file"
+        case "$key" in
+            https://*)
+                if ! curl -fsSL --max-time 30 "$key" -o "$tmp"; then
+                    rm -f "$tmp"
+                    die "unable to download the key"
+                fi
+                ;;
+            *)
+                if [ ! -f "$key" ]; then
+                    rm -f "$tmp"
+                    die "key file not found: $key"
+                fi
+                cp "$key" "$tmp"
+                ;;
+        esac
+        if [ ! -s "$tmp" ]; then
+            rm -f "$tmp"
+            die "the key is empty"
+        fi
+        ext="gpg"
+        if grep -q 'BEGIN PGP PUBLIC KEY BLOCK' "$tmp"; then
+            ext="asc"
+        fi
+        mkdir -p "$KEY_DIR"
+        cp "$tmp" "$KEY_DIR/$label.$ext"
+        rm -f "$tmp"
+        options="[signed-by=$KEY_DIR/$label.$ext] "
+    elif [ "$signed" -eq 1 ]; then
+        die "the repository is signed; give its public key with -k <link or file>"
+    else
+        warn "this repository is not signed, so its packages cannot be verified"
+        confirm "Add it anyway?" || die "cancelled"
+        options="[trusted=yes] "
+    fi
+
+    mkdir -p "$LIST_DIR"
+    printf 'deb %s%s %s %s\n' "$options" "$url" "$suite" "$component" > "$LIST_DIR/$label.list"
+    ok "Added repository '$label'. Refresh the lists with: tn gp:update"
+}
+
+repo_remove() {
+    local label="${1:-}"
+    [ -n "$label" ] || die "usage: tn -c remove <label>"
+    valid_label "$label" || die "invalid label"
+    [ "$label" != "tp" ] || die "the main repository (tp) cannot be removed"
+    if [ ! -e "$LIST_DIR/$label.list" ] && [ ! -e "$LIST_DIR/$label.list.disabled" ]; then
+        die "no repository with the label '$label'"
+    fi
+    rm -f "$LIST_DIR/$label.list" "$LIST_DIR/$label.list.disabled" "$KEY_DIR/$label.gpg" "$KEY_DIR/$label.asc"
+    ok "Removed repository '$label'. Refresh the lists with: tn gp:update"
+}
+
+tcp_add() {
+    [ -n "${TERM_APP_ID:-}" ] || die "TERM_APP_ID is not set"
+    need curl
+    cat <<'EOF'
+The community repository (TCP) contains packages built from recipes that third
+parties contributed. Recipes are reviewed before they are built, but they are not
+part of the main repository, and package scripts run on this device when you
+install a package.
+EOF
+    confirm "Activate the community repository?" || die "cancelled"
+    ALLOW_RESERVED=1
+    repo_add "$TCP_BASE/$TERM_APP_ID" -l tcp -k "$TCP_BASE/term-community.gpg" -y
+}
+
+repo_toggle() {
+    local label="$1" action="$2"
+    valid_label "$label" || die "invalid repository label: $label"
+
+    if [ "$label" = "tp" ]; then
+        if [ "$action" = "activate" ]; then
+            ok "The main repository (tp) is always active"
+            return 0
+        fi
+        die "the main repository (tp) cannot be turned off"
+    fi
+
+    if [ "$action" = "activate" ]; then
+        if [ -f "$LIST_DIR/$label.list" ]; then
+            ok "'$label' is already active"
+            return 0
+        fi
+        if [ -f "$LIST_DIR/$label.list.disabled" ]; then
+            mv "$LIST_DIR/$label.list.disabled" "$LIST_DIR/$label.list" || die "unable to activate '$label'"
+            ok "Activated '$label'. Refresh the lists with: tn gp:update"
+            return 0
+        fi
+        if [ "$label" = "tcp" ]; then
+            tcp_add
+            return $?
+        fi
+        die "no repository with the label '$label'"
+    fi
+
+    if [ -f "$LIST_DIR/$label.list" ]; then
+        mv "$LIST_DIR/$label.list" "$LIST_DIR/$label.list.disabled" || die "unable to turn off '$label'"
+        ok "Turned off '$label'. Refresh the lists with: tn gp:update"
+        return 0
+    fi
+    if [ -f "$LIST_DIR/$label.list.disabled" ]; then
+        ok "'$label' is already off"
+        return 0
+    fi
+    die "no repository with the label '$label'"
 }
 
 community_cmd() {
-    local action="${1:-status}" assume_yes=0
+    local action="${1:-}"
     if [ $# -gt 0 ]; then
         shift
     fi
-    if [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ]; then
-        assume_yes=1
-    fi
-
     case "$action" in
-        status)
-            if [ -f "$LIST_DIR/community.list" ]; then
-                echo "The community repository is enabled."
-            elif [ -f "$LIST_DIR/community.list.disabled" ]; then
-                echo "The community repository is configured but disabled."
-            else
-                echo "The community repository is not configured."
-            fi
-            ;;
-        enable)
-            if [ -f "$LIST_DIR/community.list" ]; then
-                echo "The community repository is already enabled."
-                return 0
-            fi
-            if [ -f "$LIST_DIR/community.list.disabled" ]; then
-                repo_cmd enable community
-                return
-            fi
-
-            [ -n "${TERM_APP_ID:-}" ] || die "TERM_APP_ID is not set"
-            need curl
-
-            if [ "$assume_yes" -ne 1 ]; then
-                cat <<'EOF'
-Community packages come from recipes contributed by third parties. They are
-reviewed before they are built, but they are not part of the main repository
-and package scripts run on this device when you install them.
-EOF
-                printf 'Enable the community repository? [y/N] '
-                local answer=""
-                read -r answer || true
-                case "$answer" in
-                    y|Y|yes|YES) ;;
-                    *)
-                        echo "Cancelled."
-                        return 1
-                        ;;
-                esac
-            fi
-
-            local key
-            key="$(mktemp)"
-            if ! curl -fsSL "$COMMUNITY_BASE/term-community.gpg" -o "$key" || [ ! -s "$key" ]; then
-                rm -f "$key"
-                die "unable to download the community signing key"
-            fi
-            repo_cmd add community "$COMMUNITY_BASE/$TERM_APP_ID" stable main --keyring "$key"
-            rm -f "$key"
-            ;;
-        disable)
-            repo_cmd disable community
-            ;;
-        *)
-            die "unknown community command: $action"
-            ;;
+        add) repo_add "$@" ;;
+        list) repo_list ;;
+        remove) repo_remove "$@" ;;
+        *) die "usage: tn -c add <link> -l <label> | tn -c list | tn -c remove <label>" ;;
     esac
 }
 
+# ------------------------------------------------------------------ interface state
+
+declare -a P_NAME=() P_CAND=() P_INST=() P_DESC=() P_UPG=()
+declare -a VIEW=() RLINES=()
+FILTER=""
+SEL=0
+TOP=0
+TAB=0
+RTOP=0
+RKEY=""
+STATUS=""
+RESIZED=0
+ROWS=24
+COLS=80
+RW=40
+BH=20
+RH=19
+ICON=""
+ICOLOR=""
+KEY=""
+
+get_size() {
+    local size
+    size="$(stty size 2>/dev/null)" || size=""
+    ROWS="${size% *}"
+    COLS="${size#* }"
+    case "$ROWS" in
+        ''|*[!0-9]*) ROWS=24 ;;
+    esac
+    case "$COLS" in
+        ''|*[!0-9]*) COLS=80 ;;
+    esac
+    if [ "$ROWS" -lt 8 ]; then
+        ROWS=8
+    fi
+    if [ "$COLS" -lt 40 ]; then
+        COLS=40
+    fi
+}
+
+tui_enter() {
+    printf '%s[?1049h%s[2J%s[?25l' "$ESC" "$ESC" "$ESC"
+}
+
+tui_leave() {
+    printf '%s[0m%s[?25h%s[?1049l' "$ESC" "$ESC" "$ESC"
+}
+
+tui_load() {
+    P_NAME=()
+    P_CAND=()
+    P_INST=()
+    P_DESC=()
+    P_UPG=()
+    local -A inst=() upg=() seen=()
+    local name ver abbr desc line instv upgv avail merged
+
+    while IFS="$FS_CHAR" read -r name ver abbr; do
+        case "$abbr" in
+            ii*) inst[$name]="$ver" ;;
+        esac
+    done < <(dpkg-query -W -f="\${Package}${FS_CHAR}\${Version}${FS_CHAR}\${db:Status-Abbrev}\n" 2>/dev/null)
+
+    while IFS= read -r line; do
+        name="${line%%/*}"
+        upg[$name]=1
+    done < <(apt list --upgradable 2>/dev/null | grep '\[upgradable')
+
+    avail="$(mktemp)" || return 1
+    merged="$(mktemp)" || return 1
+
+    apt-cache dumpavail 2>/dev/null | awk 'BEGIN { RS = ""; FS = "\n" } { n = ""; v = ""; d = ""; for (i = 1; i <= NF; i++) { if ($i ~ /^Package: /) n = substr($i, 10); else if ($i ~ /^Version: /) v = substr($i, 10); else if ($i ~ /^Description: /) d = substr($i, 14) } if (n != "") printf "%s\037%s\037%s\n", n, v, d }' > "$avail"
+
+    while IFS="$FS_CHAR" read -r name ver desc; do
+        [ -n "$name" ] || continue
+        seen[$name]=1
+        printf '%s\037%s\037%s\037%s\037%s\n' "$name" "$ver" "${inst[$name]:-}" "${upg[$name]:+1}" "$desc"
+    done < "$avail" > "$merged"
+
+    for name in "${!inst[@]}"; do
+        if [ -n "${seen[$name]+x}" ]; then
+            continue
+        fi
+        printf '%s\037%s\037%s\037%s\037%s\n' "$name" "${inst[$name]}" "${inst[$name]}" "" "(not in any repository)" >> "$merged"
+    done
+
+    sort -t "$FS_CHAR" -k1,1 -u "$merged" > "$avail"
+    while IFS="$FS_CHAR" read -r name ver instv upgv desc; do
+        [ -n "$name" ] || continue
+        P_NAME+=("$name")
+        P_CAND+=("$ver")
+        P_INST+=("$instv")
+        P_UPG+=("$upgv")
+        P_DESC+=("$desc")
+    done < "$avail"
+    rm -f "$avail" "$merged"
+}
+
+tui_filter() {
+    VIEW=()
+    local i lower="${FILTER,,}" hay
+    for i in "${!P_NAME[@]}"; do
+        if [ -n "$lower" ]; then
+            hay="${P_NAME[$i]} ${P_DESC[$i]}"
+            [[ "${hay,,}" == *"$lower"* ]] || continue
+        fi
+        VIEW+=("$i")
+    done
+    SEL=0
+    TOP=0
+    RKEY=""
+}
+
+current_pkg() {
+    local idx="${VIEW[$SEL]:-}"
+    if [ -n "$idx" ]; then
+        printf '%s' "${P_NAME[$idx]}"
+    fi
+}
+
+fix_scroll() {
+    local bh=$((ROWS - 3))
+    if [ "$bh" -lt 1 ]; then
+        bh=1
+    fi
+    if [ "$SEL" -lt "$TOP" ]; then
+        TOP="$SEL"
+    fi
+    if [ "$SEL" -ge $((TOP + bh)) ]; then
+        TOP=$((SEL - bh + 1))
+    fi
+    if [ "$TOP" -lt 0 ]; then
+        TOP=0
+    fi
+}
+
+reselect() {
+    local want="$1" n
+    [ -n "$want" ] || return 0
+    for n in "${!VIEW[@]}"; do
+        if [ "${P_NAME[${VIEW[$n]}]}" = "$want" ]; then
+            SEL="$n"
+            fix_scroll
+            return 0
+        fi
+    done
+}
+
+ensure_right() {
+    local pkg key text wrap
+    pkg="$(current_pkg)"
+    key="$pkg:$TAB:$RW"
+    if [ "$key" = "$RKEY" ]; then
+        return 0
+    fi
+    RKEY="$key"
+    RTOP=0
+    RLINES=()
+    if [ -z "$pkg" ]; then
+        RLINES=("No packages to show." "Press r to refresh the package lists.")
+        return 0
+    fi
+    case "$TAB" in
+        0) text="$(details_text "$pkg" 2>&1)" ;;
+        1) text="$(source_text "$pkg" 2>&1)" ;;
+        2) text="$(readme_text "$pkg" 2>&1)" ;;
+        *) text="$(versions_text "$pkg" 2>&1)" ;;
+    esac
+    wrap=$((RW - 2))
+    if [ "$wrap" -lt 8 ]; then
+        wrap=8
+    fi
+    mapfile -t RLINES < <(printf '%s\n' "$text" | sanitize | fold -s -w "$wrap")
+}
+
+row_icon() {
+    local i="$1"
+    if [ -e "$FROZEN_DIR/${P_NAME[$i]}" ]; then
+        ICON="$I_FROZEN"
+        ICOLOR="${ESC}[36m"
+    elif [ -n "${P_INST[$i]}" ] && [ -n "${P_UPG[$i]}" ]; then
+        ICON="$I_UPG"
+        ICOLOR="${ESC}[33m"
+    elif [ -n "${P_INST[$i]}" ]; then
+        ICON="$I_INST"
+        ICOLOR="${ESC}[32m"
+    else
+        ICON="$I_AVAIL"
+        ICOLOR="${ESC}[2m"
+    fi
+}
+
+draw() {
+    local lw rw bh rh r idx i text row line tabs t hdr hints buf
+    lw=$((COLS * 40 / 100))
+    if [ "$lw" -lt 16 ]; then
+        lw=16
+    fi
+    if [ "$lw" -gt 44 ]; then
+        lw=44
+    fi
+    rw=$((COLS - lw - 1))
+    bh=$((ROWS - 3))
+    rh=$((bh - 1))
+    RW="$rw"
+    BH="$bh"
+    RH="$rh"
+    ensure_right
+    fix_scroll
+
+    tabs=""
+    for t in 0 1 2 3; do
+        if [ "$t" -eq "$TAB" ]; then
+            tabs+="${ESC}[7m ${TAB_ICON[$t]} ${TAB_NAME[$t]} ${ESC}[0m"
+        elif [ "$rw" -ge 46 ]; then
+            tabs+=" ${TAB_ICON[$t]} ${TAB_NAME[$t]} "
+        else
+            tabs+=" ${TAB_ICON[$t]} "
+        fi
+    done
+
+    buf="${ESC}[?25l"
+    hdr="tn ${TN_VERSION}  ${#VIEW[@]}/${#P_NAME[@]} packages"
+    if [ -n "$FILTER" ]; then
+        hdr+="  filter: ${FILTER}"
+    fi
+    buf+="${ESC}[1;1H${ESC}[7m ${I_PKG} $(printf '%-*s' $((COLS - 3)) "${hdr:0:$((COLS - 4))}")${ESC}[0m"
+
+    for ((r = 0; r < bh; r++)); do
+        row=$((r + 2))
+        idx=$((TOP + r))
+        buf+="${ESC}[${row};1H"
+        if [ "$idx" -lt "${#VIEW[@]}" ]; then
+            i="${VIEW[$idx]}"
+            row_icon "$i"
+            text="${P_NAME[$i]} ${P_CAND[$i]}"
+            text="${text:0:$((lw - 2))}"
+            if [ "$idx" -eq "$SEL" ]; then
+                buf+="${ESC}[7m${ICON} $(printf '%-*s' $((lw - 2)) "$text")${ESC}[0m"
+            else
+                buf+="${ICOLOR}${ICON}${ESC}[0m $(printf '%-*s' $((lw - 2)) "$text")"
+            fi
+        else
+            buf+="$(printf '%*s' "$lw" '')"
+        fi
+        buf+="${SEP}"
+        if [ "$r" -eq 0 ]; then
+            buf+=" ${tabs}${ESC}[K"
+        else
+            line="${RLINES[$((RTOP + r - 1))]:-}"
+            buf+=" ${line:0:$((rw - 2))}${ESC}[K"
+        fi
+    done
+
+    buf+="${ESC}[$((ROWS - 1));1H${ESC}[K${STATUS:0:$((COLS - 1))}"
+    hints="i:install x:remove U:upgrade f:freeze z:unfreeze /:filter r:refresh h/l:tab ?:help q:quit"
+    buf+="${ESC}[${ROWS};1H${ESC}[7m$(printf '%-*s' "$COLS" "${hints:0:$COLS}")${ESC}[0m"
+    printf '%s' "$buf"
+}
+
+# Reads one key into KEY. Returns 0 for a key, 1 for a timeout, 2 for the end of the input.
+read_key() {
+    local k="" rest="" extra="" rc
+    IFS= read -rsn1 -t 1 k
+    rc=$?
+    if [ "$rc" -gt 128 ]; then
+        KEY=""
+        return 1
+    fi
+    if [ "$rc" -ne 0 ]; then
+        KEY=""
+        return 2
+    fi
+    if [ "$k" = "$ESC" ]; then
+        IFS= read -rsn2 -t 0.05 rest
+        case "$rest" in
+            '[A'|'OA') KEY=UP ;;
+            '[B'|'OB') KEY=DOWN ;;
+            '[C'|'OC') KEY=RIGHT ;;
+            '[D'|'OD') KEY=LEFT ;;
+            '[H'|'OH') KEY=HOME ;;
+            '[F'|'OF') KEY=END ;;
+            '[5'|'[6'|'[1'|'[4'|'[7'|'[8')
+                IFS= read -rsn1 -t 0.05 extra
+                case "$rest" in
+                    '[5') KEY=PGUP ;;
+                    '[6') KEY=PGDN ;;
+                    '[1'|'[7') KEY=HOME ;;
+                    *) KEY=END ;;
+                esac
+                ;;
+            '') KEY=ESCAPE ;;
+            *) KEY=OTHER ;;
+        esac
+        return 0
+    fi
+    if [ -z "$k" ]; then
+        KEY=ENTER
+    else
+        KEY="$k"
+    fi
+    return 0
+}
+
+tui_move() {
+    local n=$((SEL + $1)) max=$((${#VIEW[@]} - 1))
+    if [ "$n" -gt "$max" ]; then
+        n="$max"
+    fi
+    if [ "$n" -lt 0 ]; then
+        n=0
+    fi
+    SEL="$n"
+}
+
+tui_scroll() {
+    local max=$((${#RLINES[@]} - RH))
+    if [ "$max" -lt 0 ]; then
+        max=0
+    fi
+    RTOP=$((RTOP + $1))
+    if [ "$RTOP" -gt "$max" ]; then
+        RTOP="$max"
+    fi
+    if [ "$RTOP" -lt 0 ]; then
+        RTOP=0
+    fi
+}
+
+tui_tab() {
+    TAB=$(((TAB + $1 + 4) % 4))
+    RTOP=0
+}
+
+tui_help() {
+    cat <<'EOF'
+tn - keys
+
+  Up/Down, j/k     Move in the package list
+  g / G            First / last package
+  Left/Right, h/l  Switch tab (Details, Source, Readme, Versions)
+  1 2 3 4          Jump to a tab
+  PgUp/PgDn        Scroll the right pane
+  i                Install the package
+  x                Uninstall the package
+  U                Upgrade the package
+  f                Freeze the package (its programs stop working)
+  z                Unfreeze the package
+  /                Filter the list (empty text clears the filter)
+  Esc              Clear the filter
+  r                Refresh the package lists (apt update)
+  q                Quit
+EOF
+}
+
+# Leaves the interface, runs a command with the real terminal, then comes back.
+external() {
+    local keep
+    keep="$(current_pkg)"
+    tui_leave
+    "$@"
+    printf '\n%s ' "Press Enter to return to tn"
+    read -r _ || true
+    get_size
+    tui_enter
+    tui_load
+    tui_filter
+    RKEY=""
+    reselect "$keep"
+}
+
+tui_install() {
+    local pkg
+    pkg="$(current_pkg)"
+    [ -n "$pkg" ] || return 0
+    if is_installed "$pkg"; then
+        STATUS="$pkg is already installed"
+        return 0
+    fi
+    external apt install "$pkg"
+}
+
+tui_remove() {
+    local pkg
+    pkg="$(current_pkg)"
+    [ -n "$pkg" ] || return 0
+    if ! is_installed "$pkg"; then
+        STATUS="$pkg is not installed"
+        return 0
+    fi
+    if is_frozen "$pkg"; then
+        STATUS="$pkg is frozen; press z to unfreeze it first"
+        return 0
+    fi
+    external apt remove "$pkg"
+}
+
+tui_upgrade() {
+    local pkg
+    pkg="$(current_pkg)"
+    [ -n "$pkg" ] || return 0
+    if ! is_installed "$pkg"; then
+        STATUS="$pkg is not installed"
+        return 0
+    fi
+    if is_frozen "$pkg"; then
+        STATUS="$pkg is frozen; press z to unfreeze it first"
+        return 0
+    fi
+    external apt install --only-upgrade "$pkg"
+}
+
+tui_freeze() {
+    local action="$1" pkg out
+    pkg="$(current_pkg)"
+    [ -n "$pkg" ] || return 0
+    if [ "$action" = "freeze" ]; then
+        out="$(freeze_pkg "$pkg" 2>&1)"
+    else
+        out="$(unfreeze_pkg "$pkg" 2>&1)"
+    fi
+    STATUS="$out"
+    RKEY=""
+}
+
+tui_filter_prompt() {
+    local value=""
+    printf '%s[%d;1H%s[K%s[?25h' "$ESC" "$ROWS" "$ESC" "$ESC"
+    IFS= read -r -p "filter> " value || value=""
+    printf '%s[?25l' "$ESC"
+    FILTER="$value"
+    tui_filter
+}
+
+tui_loop() {
+    local rc resized
+    draw
+    while true; do
+        read_key
+        rc=$?
+        if [ "$rc" -eq 2 ]; then
+            break
+        fi
+        resized=0
+        if [ "$RESIZED" -eq 1 ]; then
+            RESIZED=0
+            resized=1
+            get_size
+            RKEY=""
+        fi
+        if [ "$rc" -eq 1 ]; then
+            if [ "$resized" -eq 1 ]; then
+                draw
+            fi
+            continue
+        fi
+
+        STATUS=""
+        case "$KEY" in
+            q|Q) break ;;
+            UP|k) tui_move -1 ;;
+            DOWN|j) tui_move 1 ;;
+            HOME|g) SEL=0 ;;
+            END|G)
+                SEL=$((${#VIEW[@]} - 1))
+                if [ "$SEL" -lt 0 ]; then
+                    SEL=0
+                fi
+                ;;
+            PGUP) tui_scroll $((-RH)) ;;
+            PGDN) tui_scroll "$RH" ;;
+            LEFT|h) tui_tab -1 ;;
+            RIGHT|l) tui_tab 1 ;;
+            1|2|3|4)
+                TAB=$((KEY - 1))
+                RTOP=0
+                ;;
+            i) tui_install ;;
+            x) tui_remove ;;
+            U) tui_upgrade ;;
+            f) tui_freeze freeze ;;
+            z) tui_freeze unfreeze ;;
+            r) external apt update ;;
+            '/') tui_filter_prompt ;;
+            '?') external tui_help ;;
+            ESCAPE)
+                if [ -n "$FILTER" ]; then
+                    FILTER=""
+                    tui_filter
+                fi
+                ;;
+        esac
+        draw
+    done
+}
+
+tui() {
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        die "the interface needs a terminal; run tn help for the command syntax"
+    fi
+    local tool
+    for tool in apt-cache dpkg-query awk fold sort stty; do
+        need "$tool"
+    done
+    printf 'Loading packages...\n'
+    tui_load
+    tui_filter
+    get_size
+    trap 'RESIZED=1' WINCH
+    trap 'tui_leave' EXIT
+    tui_enter
+    tui_loop
+    tui_leave
+    trap - EXIT
+}
+
+# ------------------------------------------------------------------ doctor
+
 doctor() {
-    local failed=0
+    local failed=0 tool
 
     check_tool() {
         if command -v "$2" >/dev/null 2>&1; then
@@ -253,12 +1265,15 @@ doctor() {
     echo "tn $TN_VERSION - environment check"
     echo "  PREFIX = $PREFIX"
     echo "  HOME   = ${HOME:-unset}"
+    if [ "${TN_ASCII:-0}" = "1" ]; then
+        echo "  Icons  = plain text (put a Nerd Font at ~/.term/term.ttf to get icons)"
+    else
+        echo "  Icons  = Nerd Font"
+    fi
     echo
-    check_tool "bash" bash
-    check_tool "apt" apt
-    check_tool "dpkg" dpkg
-    check_tool "curl" curl
-    check_tool "tar" tar
+    for tool in bash apt apt-cache dpkg dpkg-query curl tar awk fold sort sed stty; do
+        check_tool "$tool" "$tool"
+    done
 
     if [ -d "$APT_DIR" ]; then
         printf '  [ ok ] apt configuration directory\n'
@@ -267,10 +1282,11 @@ doctor() {
         failed=1
     fi
 
-    if [ -f "$APT_DIR/sources.list" ] || ls "$LIST_DIR"/*.list >/dev/null 2>&1; then
-        printf '  [ ok ] at least one repository is enabled\n'
+    if { [ -f "$APT_DIR/sources.list" ] && grep -qv '^[[:space:]]*\(#\|$\)' "$APT_DIR/sources.list"; } ||
+        ls "$LIST_DIR"/*.list >/dev/null 2>&1; then
+        printf '  [ ok ] at least one repository is active\n'
     else
-        printf '  [FAIL] no repository is enabled (see: tn repo add)\n'
+        printf '  [FAIL] no repository is active (see: tn -c list)\n'
         failed=1
     fi
 
@@ -283,84 +1299,126 @@ doctor() {
     return 1
 }
 
-cmd="${1:-help}"
-if [ $# -gt 0 ]; then
-    shift
-fi
+# ------------------------------------------------------------------ command line
 
-case "$cmd" in
-    update)
-        need apt
-        apt update "$@"
-        ;;
-    upgrade)
-        need apt
-        apt update || die "unable to refresh the package lists"
-        apt upgrade "$@"
-        ;;
-    install|add|i)
-        [ $# -gt 0 ] || die "install needs at least one package"
-        need apt
-        apt install "$@"
-        ;;
-    remove|rm)
-        [ $# -gt 0 ] || die "remove needs at least one package"
-        need apt
-        apt remove "$@"
-        ;;
-    purge)
-        [ $# -gt 0 ] || die "purge needs at least one package"
-        need apt
-        apt purge "$@"
-        ;;
-    autoremove)
-        need apt
-        apt autoremove "$@"
-        ;;
-    search|s)
-        [ $# -gt 0 ] || die "search needs a term"
-        need apt
-        apt search "$@"
-        ;;
-    show|info)
-        [ $# -gt 0 ] || die "show needs a package"
-        need apt
-        apt show "$@"
-        ;;
-    list|ls)
-        need apt
-        apt list "$@"
-        ;;
-    files)
-        [ $# -eq 1 ] || die "usage: tn files PKG"
-        need dpkg
-        dpkg -L "$1"
-        ;;
-    owns)
-        [ $# -eq 1 ] || die "usage: tn owns FILE"
-        need dpkg
-        dpkg -S "$1"
-        ;;
-    clean)
-        need apt
-        apt clean
-        ;;
-    repo)
-        repo_cmd "$@"
-        ;;
-    community)
-        community_cmd "$@"
-        ;;
-    doctor)
-        doctor
-        ;;
-    version|-v|--version)
-        echo "tn $TN_VERSION"
-        ;;
-    help|-h|--help)
-        usage
-        ;;
-    *)
-        die "unknown command: $cmd (try: tn help)"
-        ;;
-esac
+run_spec() {
+    local joined spec action raw normalized name failed
+    local -a names words
+
+    joined="$(IFS=';'; printf '%s' "$*")"
+    case "$joined" in
+        *:*) ;;
+        *) die "no action given; use tn <packages>:<action>, for example tn git:install" ;;
+    esac
+    spec="${joined%:*}"
+    action="${joined##*:}"
+    [ -n "$spec" ] || die "no package given before ':'"
+    [ -n "$action" ] || die "no action given after ':'"
+
+    raw="${spec//;/ }"
+    normalized="${raw//,/ }"
+    read -ra names <<<"$normalized"
+    [ "${#names[@]}" -gt 0 ] || die "no package given before ':'"
+
+    case "$action" in
+        search)
+            need apt-cache
+            read -ra words <<<"$raw"
+            apt-cache search "${words[@]}" | sanitize
+            return 0
+            ;;
+        activate|non-active)
+            [ "${#names[@]}" -eq 1 ] || die "give exactly one repository label"
+            repo_toggle "${names[0]}" "$action"
+            return $?
+            ;;
+    esac
+
+    if [ "${#names[@]}" -eq 1 ] && [ "${names[0]}" = "gp" ]; then
+        global_cmd "$action"
+        return $?
+    fi
+
+    for name in "${names[@]}"; do
+        if [ "$name" = "gp" ]; then
+            die "gp means all packages and cannot be combined with other names"
+        fi
+        valid_pkg "$name" || die "invalid package name: $name"
+    done
+
+    case "$action" in
+        install) pkg_install "${names[@]}" ;;
+        remove) pkg_remove "${names[@]}" ;;
+        purge) pkg_purge "${names[@]}" ;;
+        details) pkg_details "${names[@]}" ;;
+        upgrade) pkg_upgrade "${names[@]}" ;;
+        files)
+            need dpkg
+            for name in "${names[@]}"; do
+                dpkg -L "$name"
+            done
+            ;;
+        freeze|unfreeze)
+            need dpkg
+            failed=0
+            for name in "${names[@]}"; do
+                if [ "$action" = "freeze" ]; then
+                    freeze_pkg "$name" || failed=1
+                else
+                    unfreeze_pkg "$name" || failed=1
+                fi
+            done
+            return "$failed"
+            ;;
+        *)
+            die "unknown action: $action (try: tn help)"
+            ;;
+    esac
+}
+
+main() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -y|--yes)
+                ASSUME_YES=1
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+
+    if [ $# -eq 0 ]; then
+        tui
+        return $?
+    fi
+
+    case "$1" in
+        -h|--help|help)
+            usage
+            return 0
+            ;;
+        -V|--version|version)
+            echo "tn $TN_VERSION"
+            return 0
+            ;;
+        doctor)
+            doctor
+            return $?
+            ;;
+        -c|community)
+            shift
+            community_cmd "$@"
+            return $?
+            ;;
+        install|add|i|remove|rm|purge|search|show|info|update|upgrade|list|ls|files|owns|clean|autoremove|repo)
+            legacy_hint
+            return 2
+            ;;
+    esac
+
+    run_spec "$@"
+}
+
+main "$@"

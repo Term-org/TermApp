@@ -43,6 +43,7 @@ class TerminalView(context: Context, private val modifiers: KeyModifiers) : View
         fun onExitedEnter(session: TerminalSession)
         fun onPaneTouched(view: TerminalView)
         fun onZoom(sizeSp: Int)
+        fun onLinkTapped(url: String)
     }
 
     var listener: Listener? = null
@@ -307,6 +308,7 @@ class TerminalView(context: Context, private val modifiers: KeyModifiers) : View
             val idx = r - scrollOffset
             val row = em.getLine(idx)
             val rowAbs = lineBase + idx
+            drawLine = rowAbs
             val top = r * ch
             val limit = min(cols, row.cols)
             val cursorRowHere = cursorBlock && r == cursorScreenRow
@@ -449,6 +451,14 @@ class TerminalView(context: Context, private val modifiers: KeyModifiers) : View
             fg = Color.WHITE
             bg = SELECTION_BG
         }
+        val match = matchState(c)
+        if (match == 1) {
+            fg = Color.WHITE
+            bg = MATCH_BG
+        } else if (match == 2) {
+            fg = Color.BLACK
+            bg = CURRENT_MATCH_BG
+        }
         if (cursorBlock) {
             fg = if (em.reverseVideo) theme.foreground else theme.background
             bg = theme.cursor
@@ -562,6 +572,13 @@ class TerminalView(context: Context, private val modifiers: KeyModifiers) : View
         }
         requestFocus()
         val em = session?.emulator
+        if (em != null && em.mouseTracking == 0) {
+            val url = linkUnder(em, e.x, e.y)
+            if (url != null) {
+                listener?.onLinkTapped(url)
+                return
+            }
+        }
         if (em != null && em.mouseTracking != 0) {
             val col = (e.x / cellWidth).toInt().coerceIn(0, em.cols - 1) + 1
             val row = (e.y / cellHeight).toInt().coerceIn(0, em.rows - 1) + 1
@@ -794,6 +811,80 @@ class TerminalView(context: Context, private val modifiers: KeyModifiers) : View
         }
     }
 
+    // ------------------------------------------------------------------ links and search
+
+    private var drawLine = 0L
+    private var searchMatches: List<TerminalEmulator.SearchMatch> = emptyList()
+    private var searchByLine: Map<Long, List<TerminalEmulator.SearchMatch>> = emptyMap()
+    private var searchIndex = -1
+
+    private fun linkUnder(em: TerminalEmulator, x: Float, y: Float): String? {
+        val col = (x / cellWidth).toInt().coerceIn(0, em.cols - 1)
+        val row = (y / cellHeight).toInt().coerceIn(0, em.rows - 1)
+        return em.urlAt(row - scrollOffset, col)
+    }
+
+    fun setSearch(query: String): Int {
+        val em = session?.emulator
+        if (em == null || query.isEmpty()) {
+            clearSearch()
+            return 0
+        }
+        val found = em.search(query)
+        searchMatches = found
+        searchByLine = found.groupBy { it.line }
+        searchIndex = if (found.isEmpty()) -1 else found.size - 1
+        showCurrentMatch()
+        invalidate()
+        return found.size
+    }
+
+    fun searchStep(delta: Int) {
+        if (searchMatches.isEmpty()) {
+            return
+        }
+        searchIndex = (searchIndex + delta + searchMatches.size) % searchMatches.size
+        showCurrentMatch()
+        invalidate()
+    }
+
+    fun clearSearch() {
+        searchMatches = emptyList()
+        searchByLine = emptyMap()
+        searchIndex = -1
+        invalidate()
+    }
+
+    fun searchCount(): Int = searchMatches.size
+
+    fun searchPosition(): Int = searchIndex + 1
+
+    private fun showCurrentMatch() {
+        val em = session?.emulator ?: return
+        val match = searchMatches.getOrNull(searchIndex) ?: return
+        val relative = (match.line - em.lineBase).toInt()
+        scrollOffset = if (relative >= 0 || em.isAltScreen) {
+            0
+        } else {
+            (em.rows / 2 - relative).coerceIn(0, em.scrollbackSize)
+        }
+    }
+
+    // 0 = no match, 1 = a match, 2 = the current match.
+    private fun matchState(col: Int): Int {
+        if (searchByLine.isEmpty()) {
+            return 0
+        }
+        val list = searchByLine[drawLine] ?: return 0
+        val current = searchMatches.getOrNull(searchIndex)
+        for (m in list) {
+            if (col >= m.col && col < m.col + m.length) {
+                return if (m === current) 2 else 1
+            }
+        }
+        return 0
+    }
+
     // ------------------------------------------------------------------ input
 
     fun showKeyboard() {
@@ -988,5 +1079,7 @@ class TerminalView(context: Context, private val modifiers: KeyModifiers) : View
             Attr.STRIKE or Attr.INVISIBLE or Attr.INVERSE
 
         val SELECTION_BG = 0xFF3B5B8C.toInt()
+        val MATCH_BG = 0xFF7A5C00.toInt()
+        val CURRENT_MATCH_BG = 0xFFF59E0B.toInt()
     }
 }

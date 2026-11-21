@@ -1,6 +1,7 @@
 package app.term.one
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
@@ -10,6 +11,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
+import android.net.Uri
 import android.media.ToneGenerator
 import android.os.Build
 import android.os.Bundle
@@ -20,12 +22,15 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -54,6 +59,7 @@ import app.term.one.ui.TerminalView
 import app.term.one.ui.BootstrapView
 import app.term.one.ui.VncView
 import com.google.android.material.snackbar.Snackbar
+import rikka.shizuku.Shizuku
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -76,6 +82,9 @@ class MainActivity : AppCompatActivity(),
     private lateinit var terminalFrame: FrameLayout
     private lateinit var selectionBar: LinearLayout
     private lateinit var tabArea: FrameLayout
+    private lateinit var searchBar: LinearLayout
+    private lateinit var searchInput: EditText
+    private lateinit var searchCount: TextView
 
     private val modifiers = KeyModifiers()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -98,6 +107,27 @@ class MainActivity : AppCompatActivity(),
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private var pendingStorageToken: String? = null
+    private var pendingShizukuToken: String? = null
+
+    private val shizukuResult = Shizuku.OnRequestPermissionResultListener { requestCode, _ ->
+        if (requestCode == TermShizuku.REQUEST_CODE) {
+            runOnUiThread {
+                val token = pendingShizukuToken
+                pendingShizukuToken = null
+                val state = TermShizuku.state()
+                if (token != null) {
+                    TermShizuku.writeState(paths, token, state)
+                }
+                if (state == TermShizuku.State.READY) {
+                    snack("Shizuku is authorized")
+                }
+            }
+        }
+    }
+
+    private val shizukuBinder = Shizuku.OnBinderReceivedListener {
+        runOnUiThread { offerShizukuAuthorization() }
+    }
 
     private val intents by lazy { TermIntents(this, paths) { snack(it) } }
     private val pendingRequests = ArrayDeque<Pair<String, Map<String, String>>>()
@@ -130,7 +160,9 @@ class MainActivity : AppCompatActivity(),
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val owner = selectionOwner
-                if (owner != null && owner.hasSelection()) {
+                if (searchBar.visibility == View.VISIBLE) {
+                    closeSearch()
+                } else if (owner != null && owner.hasSelection()) {
                     owner.clearSelection()
                 } else if (vncVisible) {
                     hideVnc()
@@ -146,6 +178,9 @@ class MainActivity : AppCompatActivity(),
         ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+
+        Shizuku.addRequestPermissionResultListener(shizukuResult)
+        Shizuku.addBinderReceivedListenerSticky(shizukuBinder)
 
         val intent = Intent(this, TermService::class.java)
         ContextCompat.startForegroundService(this, intent)
@@ -187,6 +222,8 @@ class MainActivity : AppCompatActivity(),
     }
 
     override fun onDestroy() {
+        Shizuku.removeRequestPermissionResultListener(shizukuResult)
+        Shizuku.removeBinderReceivedListener(shizukuBinder)
         vncView?.disconnect()
         vncView = null
         manager?.removeListener(this)
@@ -229,6 +266,12 @@ class MainActivity : AppCompatActivity(),
                 FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             )
         }
+
+        searchBar = buildSearchBar()
+        tabArea.addView(
+            searchBar,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        )
 
         terminalFrame = FrameLayout(this).apply {
             addView(
@@ -300,6 +343,115 @@ class MainActivity : AppCompatActivity(),
         action("Select all") { selectionOwner?.selectAll() }
         action("Cancel") { selectionOwner?.clearSelection() }
         return bar
+    }
+
+    private fun buildSearchBar(): LinearLayout {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            visibility = View.GONE
+            isClickable = true
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.parseColor("#1E293B"))
+        }
+
+        searchInput = EditText(this).apply {
+            setSingleLine(true)
+            hint = "Search scrollback"
+            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            background = null
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            imeOptions = EditorInfo.IME_ACTION_SEARCH or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            setPadding((12 * dp).toInt(), 0, (8 * dp).toInt(), 0)
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+                }
+
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                }
+
+                override fun afterTextChanged(s: Editable?) {
+                    runSearch(s?.toString().orEmpty())
+                }
+            })
+            setOnEditorActionListener { _, _, _ ->
+                stepSearch(1)
+                true
+            }
+        }
+
+        searchCount = TextView(this).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextColor(Color.parseColor("#94A3B8"))
+            gravity = Gravity.CENTER
+            setPadding((6 * dp).toInt(), 0, (6 * dp).toInt(), 0)
+        }
+
+        fun button(label: String, onClick: () -> Unit): TextView = TextView(this).apply {
+            text = label
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setOnClickListener { onClick() }
+        }
+
+        bar.addView(searchInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        bar.addView(
+            searchCount,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        )
+        bar.addView(
+            button("\u25B2") { stepSearch(-1) },
+            LinearLayout.LayoutParams((40 * dp).toInt(), ViewGroup.LayoutParams.MATCH_PARENT)
+        )
+        bar.addView(
+            button("\u25BC") { stepSearch(1) },
+            LinearLayout.LayoutParams((40 * dp).toInt(), ViewGroup.LayoutParams.MATCH_PARENT)
+        )
+        bar.addView(
+            button("\u2715") { closeSearch() },
+            LinearLayout.LayoutParams((40 * dp).toInt(), ViewGroup.LayoutParams.MATCH_PARENT)
+        )
+        return bar
+    }
+
+    private fun openSearch() {
+        selectionOwner?.clearSelection()
+        searchBar.visibility = View.VISIBLE
+        searchInput.setText("")
+        searchCount.text = ""
+        searchInput.requestFocus()
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.showSoftInput(searchInput, 0)
+    }
+
+    private fun closeSearch() {
+        searchBar.visibility = View.GONE
+        split.allViews().forEach { it.clearSearch() }
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(searchInput.windowToken, 0)
+        focusedView()?.requestFocus()
+    }
+
+    private fun runSearch(text: String) {
+        val view = focusedView() ?: return
+        view.setSearch(text)
+        updateSearchCount(view)
+    }
+
+    private fun stepSearch(delta: Int) {
+        val view = focusedView() ?: return
+        view.searchStep(delta)
+        updateSearchCount(view)
+    }
+
+    private fun updateSearchCount(view: TerminalView) {
+        searchCount.text = when {
+            searchInput.text.isEmpty() -> ""
+            view.searchCount() == 0 -> "No matches"
+            else -> "${view.searchPosition()}/${view.searchCount()}"
+        }
     }
 
     private fun applyConfig() {
@@ -449,6 +601,7 @@ class MainActivity : AppCompatActivity(),
             "storage" -> setupStorage(args["token"].orEmpty())
             "open", "share" -> enqueueRequest(name, args)
             "theme" -> reloadColors()
+            "shizuku" -> handleShizuku(args["action"].orEmpty(), args["token"].orEmpty())
         }
     }
 
@@ -482,6 +635,33 @@ class MainActivity : AppCompatActivity(),
             "share" -> intents.share(next.second, finished)
             else -> finished()
         }
+    }
+
+    private fun offerShizukuAuthorization() {
+        if (TermShizuku.state() != TermShizuku.State.NEEDS_PERMISSION) {
+            return
+        }
+        Snackbar.make(
+            findViewById(android.R.id.content),
+            "Shizuku is running. Authorize rish for this app?",
+            Snackbar.LENGTH_LONG
+        )
+            .setAnchorView(extraKeys)
+            .setAction("Authorize") { TermShizuku.request() }
+            .show()
+    }
+
+    private fun handleShizuku(action: String, token: String) {
+        if (token.isEmpty()) {
+            return
+        }
+        val state = TermShizuku.state()
+        if (action == "authorize" && state == TermShizuku.State.NEEDS_PERMISSION) {
+            pendingShizukuToken = token
+            TermShizuku.request()
+            return
+        }
+        TermShizuku.writeState(paths, token, state)
     }
 
     private fun setupStorage(token: String) {
@@ -760,6 +940,10 @@ class MainActivity : AppCompatActivity(),
             }
             menu.add(0, MENU_IME_ENABLE, 8, "Enable Term clipboard keyboard")
             menu.add(0, MENU_IME_PICK, 9, "Switch keyboard")
+            menu.add(0, MENU_SEARCH, 8, "Search scrollback")
+            if (split.paneCount > 1) {
+                menu.add(0, MENU_MAXIMIZE, 9, if (split.isMaximized) "Restore panes" else "Maximize pane")
+            }
             menu.add(0, MENU_REBOOTSTRAP, 10, "Reinstall bootstrap")
             menu.add(0, MENU_EXIT, 11, "Exit and close all sessions")
             setOnMenuItemClickListener { item ->
@@ -780,6 +964,11 @@ class MainActivity : AppCompatActivity(),
                     MENU_IME_PICK -> {
                         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
                         imm.showInputMethodPicker()
+                    }
+                    MENU_SEARCH -> openSearch()
+                    MENU_MAXIMIZE -> {
+                        split.toggleMaximize()
+                        focusedView()?.requestFocus()
                     }
                     MENU_REBOOTSTRAP -> confirmRebootstrap()
                     MENU_EXIT -> manager?.closeAll()
@@ -897,6 +1086,32 @@ class MainActivity : AppCompatActivity(),
         }
     }
 
+    override fun onLinkTapped(url: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Open link?")
+            .setMessage(url)
+            .setPositiveButton("Open") { _, _ -> openLink(url) }
+            .setNeutralButton("Copy") { _, _ ->
+                TermClipboard.set(paths, url)
+                snack("Link copied to the Term clipboard")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun openLink(url: String) {
+        val scheme = Uri.parse(url).scheme?.lowercase()
+        if (scheme == null || scheme !in setOf("http", "https", "mailto", "tel", "geo")) {
+            snack("Unsupported link")
+            return
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (e: ActivityNotFoundException) {
+            snack("No app can open this link")
+        }
+    }
+
     override fun onZoom(sizeSp: Int) {
         fontSizeSp = sizeSp.coerceIn(8, 40)
         split.allViews().forEach { it.setFontSize(fontSizeSp) }
@@ -1002,5 +1217,7 @@ class MainActivity : AppCompatActivity(),
         const val MENU_VNC_SHOW = 19
         const val MENU_VNC_CLOSE = 20
         const val MENU_REBOOTSTRAP = 21
+        const val MENU_SEARCH = 22
+        const val MENU_MAXIMIZE = 23
     }
 }

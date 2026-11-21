@@ -8,7 +8,8 @@ object TermShellFiles {
 
     private val SYSTEM_ASSETS = mapOf(
         "system/bashrc" to "bashrc",
-        "system/mkshrc" to "mkshrc"
+        "system/mkshrc" to "mkshrc",
+        "system/completion.bash" to "completion.bash"
     )
 
     // Headers written into the user files by older versions. Files that still start with

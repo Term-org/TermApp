@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="app.term.api.permission.CONNECT" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -29,14 +30,100 @@
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
+        </activity>
+
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="Settings"
+            android:theme="@style/Theme.Term.Settings" />
+
+        <activity-alias
+            android:name=".LauncherDefault"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher"
+            android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherSky"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_sky"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_sky"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherEmerald"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_emerald"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_emerald"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherAmber"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_amber"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_amber"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherRose"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_rose"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_rose"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherViolet"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_violet"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_violet"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <service
             android:name=".TermService"

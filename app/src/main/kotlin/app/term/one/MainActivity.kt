@@ -107,6 +107,15 @@ class MainActivity : AppCompatActivity(),
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private var pendingStorageToken: String? = null
+    private var configStamp = 0L
+
+    private val settingsLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val action = result.data?.getStringExtra(SettingsActivity.EXTRA_ACTION)
+            if (action == SettingsActivity.ACTION_REINSTALL) {
+                confirmRebootstrap()
+            }
+        }
     private var pendingShizukuToken: String? = null
 
     private val shizukuResult = Shizuku.OnRequestPermissionResultListener { requestCode, _ ->
@@ -214,6 +223,10 @@ class MainActivity : AppCompatActivity(),
 
     override fun onResume() {
         super.onResume()
+        if (paths.termProperties.lastModified() != configStamp) {
+            applyConfig()
+            refreshTabs()
+        }
         if (vncVisible) {
             vncView?.requestFocus()
         } else {
@@ -462,6 +475,7 @@ class MainActivity : AppCompatActivity(),
             it.setFontSize(fontSizeSp)
         }
         extraKeys.setLayout(ExtraKeysConfig.load(paths.extraKeysProperties))
+        configStamp = paths.termProperties.lastModified()
         reloadColors()
         arrange()
     }
@@ -927,6 +941,7 @@ class MainActivity : AppCompatActivity(),
     override fun onMenu(anchor: View) {
         PopupMenu(this, anchor).apply {
             menu.add(0, MENU_NEW, 0, "New session")
+            menu.add(0, MENU_SETTINGS, 1, "Settings")
             menu.add(0, MENU_PASTE, 1, "Paste (system clipboard)")
             menu.add(0, MENU_PASTE_TERM, 2, "Paste (Term clipboard)")
             menu.add(0, MENU_FONT_UP, 3, "Increase font size")
@@ -948,6 +963,7 @@ class MainActivity : AppCompatActivity(),
             menu.add(0, MENU_EXIT, 11, "Exit and close all sessions")
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
+                    MENU_SETTINGS -> settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
                     MENU_NEW -> createSession()
                     MENU_PASTE -> pasteSystem()
                     MENU_PASTE_TERM -> pasteTerm()
@@ -1219,5 +1235,6 @@ class MainActivity : AppCompatActivity(),
         const val MENU_REBOOTSTRAP = 21
         const val MENU_SEARCH = 22
         const val MENU_MAXIMIZE = 23
+        const val MENU_SETTINGS = 24
     }
 }

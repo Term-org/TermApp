@@ -14,6 +14,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import app.term.one.api.TermApiBridge
+import app.term.one.api.TermApiClient
 import app.term.one.core.SessionManager
 import app.term.one.core.TerminalSession
 
@@ -52,6 +54,7 @@ class TermService : Service() {
         override fun onTermCommand(session: TerminalSession, name: String, args: Map<String, String>) {
             when (name) {
                 "wakelock" -> setWakeLock(args["state"] == "1")
+                "api" -> TermApiBridge.handle(paths, args)
                 else -> commands.handle(name, args)
             }
         }
@@ -63,6 +66,10 @@ class TermService : Service() {
         createChannel()
         paths = TermPaths.get(this)
         commands = TermCommands(this, paths)
+        TermApiClient.init(this)
+        if (TermSettings.load(paths.termProperties).termApi) {
+            TermApiClient.connect()
+        }
         manager = SessionManager(paths)
         manager.addListener(managerListener)
         enterForeground()

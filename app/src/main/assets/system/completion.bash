@@ -178,7 +178,17 @@ _term_share_complete() {
     fi
 }
 
+_term_api_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    if [ "$COMP_CWORD" -eq 1 ]; then
+        _term_reply "$cur" status shizuku help
+    elif [ "$COMP_CWORD" -eq 2 ] && [ "${COMP_WORDS[1]}" = "shizuku" ]; then
+        _term_reply "$cur" status authorize exec
+    fi
+}
+
 complete -F _tn_complete tn
+complete -F _term_api_complete term-api
 complete -F _term_theme_complete term-theme
 complete -F _term_clip_complete term-clip
 complete -F _term_wakelock_complete term-wakelock

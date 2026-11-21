@@ -6,4 +6,10 @@
         <item name="android:statusBarColor">#0B1220</item>
         <item name="android:navigationBarColor">#0B1220</item>
     </style>
+    <style name="Theme.Term.Settings" parent="Theme.Material3.Dark">
+        <item name="colorPrimary">#38BDF8</item>
+        <item name="android:windowBackground">#0B1220</item>
+        <item name="android:statusBarColor">#0B1220</item>
+        <item name="android:navigationBarColor">#0B1220</item>
+    </style>
 </resources>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="cursor_style_entries">
+        <item>Block</item>
+        <item>Underline</item>
+        <item>Bar</item>
+    </string-array>
+    <string-array name="cursor_style_values">
+        <item>block</item>
+        <item>underline</item>
+        <item>bar</item>
+    </string-array>
+    <string-array name="bell_entries">
+        <item>Vibrate</item>
+        <item>Beep</item>
+        <item>Ignore</item>
+    </string-array>
+    <string-array name="bell_values">
+        <item>vibrate</item>
+        <item>beep</item>
+        <item>ignore</item>
+    </string-array>
+</resources>

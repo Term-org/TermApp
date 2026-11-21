@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory
+        android:title="About"
+        app:iconSpaceReserved="false">
+        <Preference
+            android:key="about_version"
+            android:selectable="false"
+            android:title="Version"
+            app:iconSpaceReserved="false" />
+        <Preference
+            android:key="about_id"
+            android:selectable="false"
+            android:title="Application ID"
+            app:iconSpaceReserved="false" />
+        <Preference
+            android:key="about_build"
+            android:selectable="false"
+            android:title="Build type"
+            app:iconSpaceReserved="false" />
+        <Preference
+            android:key="about_releases"
+            android:summary="Open the releases page on GitHub"
+            android:title="Releases"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="Icon"
+        app:iconSpaceReserved="false">
+        <ListPreference
+            android:key="app_icon"
+            android:persistent="false"
+            android:title="App icon"
+            app:iconSpaceReserved="false"
+            app:useSimpleSummaryProvider="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="TermAPI"
+        app:iconSpaceReserved="false">
+        <Preference
+            android:key="termapi_status"
+            android:selectable="false"
+            android:title="Status"
+            app:iconSpaceReserved="false" />
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:key="termapi"
+            android:summary="Lets the terminal use the Android features of the TermAPI app"
+            android:title="Connect to TermAPI"
+            app:iconSpaceReserved="false" />
+        <Preference
+            android:key="termapi_open"
+            android:summary="Open the TermAPI app, or download it"
+            android:title="TermAPI app"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="Terminal"
+        app:iconSpaceReserved="false">
+        <SeekBarPreference
+            android:defaultValue="14"
+            android:key="font-size"
+            android:max="40"
+            android:title="Font size"
+            app:iconSpaceReserved="false"
+            app:min="8"
+            app:showSeekBarValue="true" />
+        <ListPreference
+            android:defaultValue="block"
+            android:entries="@array/cursor_style_entries"
+            android:entryValues="@array/cursor_style_values"
+            android:key="cursor-style"
+            android:title="Cursor style"
+            app:iconSpaceReserved="false"
+            app:useSimpleSummaryProvider="true" />
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="cursor-blink"
+            android:title="Blinking cursor"
+            app:iconSpaceReserved="false" />
+        <ListPreference
+            android:defaultValue="vibrate"
+            android:entries="@array/bell_entries"
+            android:entryValues="@array/bell_values"
+            android:key="bell"
+            android:title="Bell"
+            app:iconSpaceReserved="false"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            android:defaultValue="2000"
+            android:key="scrollback"
+            android:title="Scrollback lines"
+            app:iconSpaceReserved="false"
+            app:useSimpleSummaryProvider="true" />
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="session-tabs-top"
+            android:summary="Turn off to put the tabs below the terminal"
+            android:title="Session tabs at the top"
+            app:iconSpaceReserved="false" />
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="volume-keys"
+            android:summary="Volume down is Ctrl, volume up is Alt"
+            android:title="Volume keys as modifiers"
+            app:iconSpaceReserved="false" />
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:key="allow-external-apps"
+            android:summary="Lets other apps with the RUN_COMMAND permission run commands"
+            android:title="Allow commands from other apps"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="System"
+        app:iconSpaceReserved="false">
+        <Preference
+            android:key="system_keyboard_enable"
+            android:summary="Turn on the keyboard that inserts the Term clipboard"
+            android:title="Enable Term clipboard keyboard"
+            app:iconSpaceReserved="false" />
+        <Preference
+            android:key="system_keyboard_pick"
+            android:title="Switch keyboard"
+            app:iconSpaceReserved="false" />
+        <Preference
+            android:key="system_shizuku"
+            android:title="Shizuku (rish)"
+            app:iconSpaceReserved="false" />
+        <Preference
+            android:key="system_bootstrap"
+            android:summary="Deletes everything under the prefix and downloads a fresh base system"
+            android:title="Reinstall bootstrap"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+</PreferenceScreen>

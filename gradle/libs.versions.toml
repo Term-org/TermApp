@@ -5,6 +5,7 @@ coreKtx = "1.15.0"
 appcompat = "1.7.0"
 material = "1.12.0"
 shizuku = "13.1.5"
+preference = "1.2.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -12,6 +13,7 @@ androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
 shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
+androidx-preference-ktx = { group = "androidx.preference", name = "preference-ktx", version.ref = "preference" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

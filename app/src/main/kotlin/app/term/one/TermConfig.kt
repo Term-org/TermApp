@@ -20,6 +20,8 @@ scrollback=2000
 allow-external-apps=false
 # Use the volume keys as Ctrl (volume down) and Alt (volume up)
 volume-keys=true
+# Connect to the TermAPI app
+termapi=false
 """
 
     private const val DEFAULT_EXTRAKEYS = """# Extra keys layout, keys separated by comma

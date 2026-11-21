@@ -86,4 +86,5 @@ dependencies {
     implementation(libs.material)
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
+    implementation(libs.androidx.preference.ktx)
 }

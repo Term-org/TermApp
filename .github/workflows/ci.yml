@@ -1,3 +1,4 @@
+
 name: CI
 
 on:
@@ -19,6 +20,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 60
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,8 +34,14 @@ jobs:
       - name: Install Android SDK components
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
           yes | "$sdkmanager" --licenses > /dev/null || true
-          "$sdkmanager" "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;26.1.10909125"
+
+          "$sdkmanager" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;26.1.10909125"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -52,15 +60,19 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           mkdir -p dist
+
           for flavor in termone termtwo termthree termfour; do
             src="app/build/outputs/apk/$flavor/release/app-$flavor-release-unsigned.apk"
+
             if [ ! -f "$src" ]; then
               echo "Missing $src" >&2
               exit 1
             fi
+
             cp "$src" "dist/$flavor.apk"
           done
-          ls -l dist
+
+          ls -lh dist
 
       - name: Upload APKs
         if: github.event_name != 'pull_request'

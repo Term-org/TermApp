@@ -963,7 +963,7 @@ class MainActivity : AppCompatActivity(),
             menu.add(0, MENU_EXIT, 11, "Exit and close all sessions")
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
-                    MENU_SETTINGS -> settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
+                    MENU_SETTINGS -> settingsLauncher.launch(Intent(this@MainActivity, SettingsActivity::class.java))
                     MENU_NEW -> createSession()
                     MENU_PASTE -> pasteSystem()
                     MENU_PASTE_TERM -> pasteTerm()

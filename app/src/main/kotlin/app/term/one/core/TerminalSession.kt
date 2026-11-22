@@ -5,6 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import app.term.one.TermEnvironment
 import app.term.one.TermPaths
+import app.term.one.TermTheme
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ExecutorService

@@ -103,9 +103,8 @@ jobs:
           fi
 
           ci_workflow_id="$(
-            gh workflow view ci.yml \
-              --repo "$GITHUB_REPOSITORY" \
-              --json id \
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml" \
               --jq .id
           )"
 

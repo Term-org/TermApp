@@ -20,7 +20,7 @@ object TermShizuku {
                 Shizuku.shouldShowRequestPermissionRationale() -> State.DENIED
                 else -> State.NEEDS_PERMISSION
             }
-        } catch (e: IllegalStateException) {
+        } catch (e: RuntimeException) {
             State.NOT_RUNNING
         }
     }
@@ -28,7 +28,7 @@ object TermShizuku {
     fun request() {
         try {
             Shizuku.requestPermission(REQUEST_CODE)
-        } catch (e: IllegalStateException) {
+        } catch (e: RuntimeException) {
             return
         }
     }

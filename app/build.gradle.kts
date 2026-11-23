@@ -1,3 +1,6 @@
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -17,6 +20,53 @@ val termFlavors = listOf(
     TermFlavor("termfour", "app.term.four", "TermFour", "#4C1D95")
 )
 
+// Builds the Rust workspace in src/main/assets with cargo-ndk and collects the termcli binary
+// of every ABI into bin-<abi>/termcli.
+abstract class BuildCliTask @Inject constructor(
+    private val operations: ExecOperations
+) : DefaultTask() {
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sources: ConfigurableFileCollection
+
+    @get:Internal
+    abstract val workspace: DirectoryProperty
+
+    @get:Internal
+    abstract val cargoTarget: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun build() {
+        val target = cargoTarget.get().asFile
+        operations.exec {
+            workingDir = workspace.get().asFile
+            environment("CARGO_TARGET_DIR", target.absolutePath)
+            commandLine(
+                "cargo", "ndk",
+                "-t", "arm64-v8a",
+                "-t", "x86_64",
+                "-P", "26",
+                "build", "--release"
+            )
+        }
+
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        val triples = listOf("aarch64-linux-android" to "arm64-v8a", "x86_64-linux-android" to "x86_64")
+        for ((triple, abi) in triples) {
+            val binary = File(target, "$triple/release/termcli")
+            check(binary.isFile) { "cargo did not produce $binary" }
+            val folder = File(out, "bin-$abi")
+            folder.mkdirs()
+            binary.copyTo(File(folder, "termcli"), overwrite = true)
+        }
+    }
+}
+
 android {
     namespace = "app.term.one"
     compileSdk = 35
@@ -26,8 +76,8 @@ android {
         // Must stay at 28: Android 10+ blocks exec() from the app data directory
         // for apps targeting API 29 or higher (W^X), which would break bash and apt.
         targetSdk = 28
-        versionCode = 3
-        versionName = "0.1.1"
+        versionCode = 1
+        versionName = "0.1.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -77,6 +127,31 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+}
+
+val buildCli = tasks.register<BuildCliTask>("buildCli") {
+    sources.from(fileTree("src/main/assets") { include("**/*.rs", "**/Cargo.toml") })
+    workspace.set(layout.projectDirectory.dir("src/main/assets"))
+    cargoTarget.set(layout.buildDirectory.dir("cli/target"))
+    outputDir.set(layout.buildDirectory.dir("generated/cli-assets"))
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(buildCli, BuildCliTask::outputDir)
+    }
+}
+
+// The Rust sources live in src/main/assets next to the other assets. They are only needed to
+// build termcli, so they are removed from the merged assets and never end up in the APK.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    doLast {
+        outputs.files.forEach { root ->
+            root.walkTopDown()
+                .filter { it.isFile && (it.extension == "rs" || it.name == "Cargo.toml" || it.name == "Cargo.lock") }
+                .forEach { it.delete() }
+        }
     }
 }
 

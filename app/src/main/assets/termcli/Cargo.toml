@@ -1,0 +1,18 @@
+[package]
+name = "termcli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tn = { path = "../tn" }
+terminal-vnc = { path = "../terminal-vnc" }
+term-storage = { path = "../term-storage" }
+term-open = { path = "../term-open" }
+term-share = { path = "../term-share" }
+term-notify = { path = "../term-notify" }
+term-clip = { path = "../term-clip" }
+term-wakelock = { path = "../term-wakelock" }
+term-shizuku = { path = "../term-shizuku" }
+term-api = { path = "../term-api" }
+term-theme = { path = "../term-theme" }

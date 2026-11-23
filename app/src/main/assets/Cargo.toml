@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "termcore",
+    "tn",
+    "terminal-vnc",
+    "term-storage",
+    "term-open",
+    "term-share",
+    "term-notify",
+    "term-clip",
+    "term-wakelock",
+    "term-shizuku",
+    "term-api",
+    "term-theme",
+    "termcli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+libc = "0.2"
+termcore = { path = "termcore" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

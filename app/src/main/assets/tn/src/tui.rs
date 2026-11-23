@@ -681,7 +681,7 @@ pub fn run() -> i32 {
     let mut app = App::new();
     app.reload();
     unsafe {
-        libc::signal(libc::SIGWINCH, on_winch as libc::sighandler_t);
+        libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t);
     }
     screen.enter();
 

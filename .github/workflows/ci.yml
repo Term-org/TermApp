@@ -3,9 +3,11 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*.*.*"
+
   pull_request:
+
   workflow_dispatch:
 
 permissions:
@@ -25,6 +27,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate release tag
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $TAG" >&2
+            exit 1
+          fi
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -33,6 +47,8 @@ jobs:
 
       - name: Install Android SDK components
         run: |
+          set -euo pipefail
+
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
           yes | "$sdkmanager" --licenses > /dev/null || true
@@ -52,24 +68,32 @@ jobs:
         run: cargo install cargo-ndk --locked
 
       - name: Point cargo-ndk at the NDK
-        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> "$GITHUB_ENV"
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" \
+            >> "$GITHUB_ENV"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.10.2"
 
-      - name: Build debug APK (pull requests)
-        if: github.event_name == 'pull_request'
-        run: gradle --no-daemon --stacktrace :app:assembleTermoneDebug
+      - name: Build debug APK
+        if: github.event_name == 'pull_request' || github.ref_type != 'tag'
+        run: |
+          gradle --no-daemon --stacktrace \
+            :app:assembleTermoneDebug
 
       - name: Build release APKs
-        if: github.event_name != 'pull_request'
-        run: gradle --no-daemon --stacktrace :app:assembleRelease
+        if: github.ref_type == 'tag'
+        run: |
+          gradle --no-daemon --stacktrace \
+            :app:assembleRelease
 
       - name: Collect APKs
-        if: github.event_name != 'pull_request'
+        if: github.ref_type == 'tag'
         run: |
+          set -euo pipefail
+
           mkdir -p dist
 
           for flavor in termone termtwo termthree termfour; do
@@ -86,7 +110,7 @@ jobs:
           ls -lh dist
 
       - name: Upload APKs
-        if: github.event_name != 'pull_request'
+        if: github.ref_type == 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: apks

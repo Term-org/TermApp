@@ -2,72 +2,103 @@
 name: Tag
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "New version tag, for example v0.2.0"
-        required: true
-        type: string
 
 permissions:
   contents: write
   actions: write
 
 concurrency:
-  group: tag
+  group: tag-main
   cancel-in-progress: false
 
 jobs:
   tag:
-    name: Bump version and tag
+    name: Bump patch and create tag
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
-      - name: Check the branch and tag
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            echo "Run this workflow on the main branch" >&2
-            exit 1
-          fi
-
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "The tag must look like v1.2.3" >&2
-            exit 1
-          fi
-
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
+      - name: Synchronize main
+        run: |
+          set -euo pipefail
+
+          git fetch origin main --tags
+          git checkout -B main origin/main
+
+      - name: Calculate next patch version
+        id: version
+        run: |
+          set -euo pipefail
+
+          current="$(bash scripts/version.sh get-name)"
+
+          if ! [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid current version: $current" >&2
+            exit 1
+          fi
+
+          IFS='.' read -r major minor patch <<< "$current"
+
+          next_patch=$((10#$patch + 1))
+          next="$major.$minor.$next_patch"
+          tag="v$next"
+
+          echo "Current version: $current"
+          echo "Next version: $next"
+          echo "Tag: $tag"
+
+          {
+            echo "name=$next"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Check existing tag
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
+          set -euo pipefail
+
           if git ls-remote --exit-code --tags origin \
             "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists" >&2
             exit 1
+          else
+            status=$?
+            if [ "$status" -ne 2 ]; then
+              echo "Unable to check remote tag" >&2
+              exit "$status"
+            fi
           fi
 
-      - name: Update the version
+      - name: Update application version
         id: bump
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
+          set -euo pipefail
           bash scripts/bump-version.sh "$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and tag
+      - name: Commit and create tag
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
           NAME: ${{ steps.bump.outputs.name }}
           CODE: ${{ steps.bump.outputs.code }}
         run: |
+          set -euo pipefail
+
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add app/build.gradle.kts
 
@@ -76,7 +107,8 @@ jobs:
             exit 1
           fi
 
-          git commit -m "Release $TAG (versionName $NAME, versionCode $CODE) [skip ci]"
+          git commit \
+            -m "Release $TAG (versionName $NAME, versionCode $CODE) [skip ci]"
 
           git tag -a "$TAG" -m "Release $TAG"
 
@@ -84,13 +116,15 @@ jobs:
             HEAD:refs/heads/main \
             "refs/tags/$TAG"
 
-      - name: Build the tag
+      - name: Dispatch CI for the tag
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
+          set -euo pipefail
+
           gh workflow run ci.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$TAG"
 
-          echo "CI was dispatched for $TAG"
+          echo "CI dispatched for $TAG"

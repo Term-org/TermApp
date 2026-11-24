@@ -76,8 +76,8 @@ android {
         // Must stay at 28: Android 10+ blocks exec() from the app data directory
         // for apps targeting API 29 or higher (W^X), which would break bash and apt.
         targetSdk = 28
-        versionCode = 3
-        versionName = "0.1.3"
+        versionCode = 4
+        versionName = "0.1.4"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")

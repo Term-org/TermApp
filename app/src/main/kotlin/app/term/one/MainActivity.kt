@@ -109,6 +109,13 @@ class MainActivity : AppCompatActivity(),
     private var pendingStorageToken: String? = null
     private var configStamp = 0L
 
+    private fun currentStamp(): Long = maxOf(
+        paths.termProperties.lastModified(),
+        paths.colorsProperties.lastModified(),
+        paths.extraKeysProperties.lastModified(),
+        paths.termFont.lastModified()
+    )
+
     private val settingsLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val action = result.data?.getStringExtra(SettingsActivity.EXTRA_ACTION)
@@ -223,7 +230,7 @@ class MainActivity : AppCompatActivity(),
 
     override fun onResume() {
         super.onResume()
-        if (paths.termProperties.lastModified() != configStamp) {
+        if (currentStamp() != configStamp) {
             applyConfig()
             refreshTabs()
         }
@@ -475,7 +482,7 @@ class MainActivity : AppCompatActivity(),
             it.setFontSize(fontSizeSp)
         }
         extraKeys.setLayout(ExtraKeysConfig.load(paths.extraKeysProperties))
-        configStamp = paths.termProperties.lastModified()
+        configStamp = currentStamp()
         reloadColors()
         arrange()
     }

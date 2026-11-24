@@ -1,15 +1,18 @@
-
 name: Release
 
 on:
   workflow_call:
     inputs:
       tag:
-        description: "Version tag, for example v0.2.0"
+        description: "Version tag"
         type: string
         required: true
       sha:
         description: "Commit that the tag points at"
+        type: string
+        required: true
+      run_id:
+        description: "CI run ID to download artifacts from"
         type: string
         required: true
   workflow_dispatch:
@@ -31,7 +34,10 @@ permissions:
   actions: read
 
 concurrency:
-  group: release-${{ github.event.workflow_run.head_sha }}
+  group: >-
+    release-${{ github.event.workflow_run.head_sha
+      || github.event.inputs.sha
+      || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -39,6 +45,7 @@ jobs:
     name: Sign and publish
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_call' ||
       (
         github.event.workflow_run.conclusion == 'success' &&
         (
@@ -54,15 +61,19 @@ jobs:
     steps:
       - name: Validate CI run
         id: select
+        if: github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ID: >-
+            ${{ github.event_name == 'workflow_dispatch'
+              && github.event.inputs.run_id
+              || github.event.workflow_run.id }}
           SHA_EVENT: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
 
-          if [ -z "$RUN_ID" ] || [ -z "$SHA_EVENT" ]; then
-            echo "Missing CI run ID or commit SHA" >&2
+          if [ -n "$SHA_EVENT" ] && [ "$run_sha" != "$SHA_EVENT" ]; then
+            echo "CI commit SHA mismatch" >&2
             exit 1
           fi
 
@@ -114,27 +125,40 @@ jobs:
       - name: Checkout CI commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.select.outputs.sha }}
+          ref: >-
+            ${{ github.event_name == 'workflow_call'
+              && inputs.sha
+              || steps.select.outputs.sha }}
           fetch-depth: 0
 
       - name: Identify release tag
         id: version
+        if: >-
+          github.event_name == 'workflow_call' ||
+          (
+            github.event_name == 'workflow_run' ||
+            github.event_name == 'workflow_dispatch'
+          )
         env:
-          SHA: ${{ steps.select.outputs.sha }}
+          SHA: >-
+            ${{ github.event_name == 'workflow_call'
+              && inputs.sha
+              || steps.select.outputs.sha }}
+          TAG_INPUT: ${{ inputs.tag }}
         run: |
           set -euo pipefail
 
-          git fetch origin --force --tags
+          if [ -n "$TAG_INPUT" ] && [ "${{ github.event_name }}" = "workflow_call" ]; then
+            tag="$TAG_INPUT"
+          else
+            git fetch origin --force --tags
+            tags="$(git tag --points-at "$SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
 
-          tags="$(
-            git tag --points-at "$SHA" |
-            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true
-          )"
-
-          if [ -z "$tags" ]; then
-            echo "This CI commit has no release tag."
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            if [ -z "$tags" ]; then
+              echo "This CI commit has no release tag."
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
 
           count="$(printf '%s\n' "$tags" | wc -l | tr -d ' ')"
@@ -172,7 +196,10 @@ jobs:
         if: steps.version.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ steps.select.outputs.run_id }}
+          RUN_ID: >-
+            ${{ github.event_name == 'workflow_call'
+              && inputs.run_id
+              || steps.select.outputs.run_id }}
         run: |
           set -euo pipefail
 

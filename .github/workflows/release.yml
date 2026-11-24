@@ -2,6 +2,24 @@
 name: Release
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Version tag, for example v0.2.0"
+        type: string
+        required: true
+      sha:
+        description: "Commit that the tag points at"
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing version tag to release, for example v0.2.0"
+        required: true
+      run_id:
+        description: "Run that built the APKs (the id of the Tag run or of a CI run)"
+        required: true
   workflow_run:
     workflows:
       - CI

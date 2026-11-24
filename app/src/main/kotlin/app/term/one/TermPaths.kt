@@ -37,6 +37,9 @@ class TermPaths private constructor(context: Context) {
 
     fun isBootstrapped(): Boolean = bootstrapMarker.isFile && bash.canExecute()
 
+    // TermBoot (busybox) archives contain this file; their shell is ash, not bash.
+    fun isBootKind(): Boolean = File(prefix, ".termboot").isFile
+
     fun ensureDirectories() {
         listOf(rootDir, home, tmp, docs, configDir, systemDir).forEach { dir ->
             if (!dir.exists()) {

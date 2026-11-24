@@ -35,6 +35,8 @@ object TermEnvironment {
         env["SHELL"] = if (paths.bash.canExecute()) paths.bash.absolutePath else "/system/bin/sh"
         if (!paths.bash.canExecute()) {
             env["ENV"] = paths.systemMkshrc.absolutePath
+        } else if (paths.isBootKind()) {
+            env["ENV"] = File(paths.systemDir, "bootrc").absolutePath
         }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"

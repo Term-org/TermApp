@@ -1,0 +1,12 @@
+# Configuration of the minimal boot shell (busybox ash).
+# This file is rewritten by the app on every start, so do not edit it.
+
+PS1='\W\$ '
+HISTFILE="$HOME/.ash_history"
+HISTSIZE=2000
+
+alias ls='ls --color=auto'
+alias ll='ls -lAh'
+alias ..='cd ..'
+
+export PS1 HISTFILE HISTSIZE

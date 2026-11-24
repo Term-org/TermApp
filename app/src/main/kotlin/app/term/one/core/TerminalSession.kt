@@ -78,7 +78,7 @@ class TerminalSession(
         val name = File(executable).name
         val argv: Array<String> = when {
             command != null -> arrayOf(name) + args
-            bashReady -> arrayOf(name, "--rcfile", paths.systemBashrc.absolutePath)
+            bashReady && !paths.isBootKind() -> arrayOf(name, "--rcfile", paths.systemBashrc.absolutePath)
             else -> arrayOf(name)
         }
         val dir = workDir ?: paths.home.absolutePath

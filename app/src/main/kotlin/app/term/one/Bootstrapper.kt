@@ -43,8 +43,16 @@ class Bootstrapper(private val context: Context, private val paths: TermPaths) {
     private fun perform(progress: Progress) {
         val arch = architecture()
         val config = loadConfig()
+        // Debug builds use the small TermBoot archive, release builds use TP.
+        // term.properties can force one of them: bootstrap=boot or bootstrap=tp.
+        val source = config.getProperty("bootstrap")?.trim()?.lowercase()
+            ?: if (BuildConfig.DEBUG) "boot" else "tp"
         val url = config.getProperty("bootstrap-url")?.trim()?.takeIf { it.isNotEmpty() }
-            ?: "$DEFAULT_BASE/bootstrap-${paths.appId}-$arch.zip"
+            ?: if (source == "boot") {
+                "$BOOT_BASE/termboot-$arch.zip"
+            } else {
+                "$DEFAULT_BASE/bootstrap-${paths.appId}-$arch.zip"
+            }
         if (!url.startsWith("https://")) {
             throw BootstrapException("The bootstrap URL must use https")
         }
@@ -336,6 +344,7 @@ class Bootstrapper(private val context: Context, private val paths: TermPaths) {
 
     private companion object {
         const val DEFAULT_BASE = "https://github.com/Term-org/TP/releases/latest/download"
+        const val BOOT_BASE = "https://github.com/Term-org/TermBoot/releases/latest/download"
         val SHA256 = Regex("^[0-9a-f]{64}$")
         val EXEC_MODE = "755".toInt(8)
         val FILE_MODE = "644".toInt(8)
